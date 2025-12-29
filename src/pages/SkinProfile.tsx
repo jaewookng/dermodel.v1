@@ -32,9 +32,16 @@ export const SkinProfile = () => {
   const { user, updateProfile } = useAuth()
   const navigate = useNavigate()
 
-  const [skinType, setSkinType] = useState(user?.skin_type || '')
+  const [skinType, setSkinType] = useState(
+    Array.isArray(user?.skin_type) && user.skin_type.length > 0
+      ? user.skin_type[0]
+      : typeof user?.skin_type === 'string'
+      ? user.skin_type
+      : ''
+  )
   const [skinConcerns, setSkinConcerns] = useState<string[]>(user?.skin_concerns || [])
   const [loading, setLoading] = useState(false)
+  const [saved, setSaved] = useState(false)
 
   if (!user) {
     return (
@@ -48,11 +55,14 @@ export const SkinProfile = () => {
   const handleSave = async () => {
     try {
       setLoading(true)
-      await updateProfile({
-        skin_type: skinType,
+      setSaved(false)
+      const updates: Parameters<typeof updateProfile>[0] = {
+        skin_type: skinType || null,
         skin_concerns: skinConcerns,
-      })
+      }
+      await updateProfile(updates)
       toast.success('Skin profile updated')
+      setSaved(true)
     } catch (error) {
       console.error('Failed to update skin profile:', error)
       toast.error('Failed to update skin profile')
@@ -149,6 +159,9 @@ export const SkinProfile = () => {
                 'Save Skin Profile'
               )}
             </Button>
+            {saved && (
+              <p className="text-sm text-green-700 text-center">Changes have been saved.</p>
+            )}
           </CardContent>
         </Card>
       </div>

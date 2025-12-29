@@ -1,4 +1,4 @@
-import { useCallback, useState, useMemo } from 'react';
+import { useCallback, useState, useMemo, useEffect } from 'react';
 import { Database, Search, Pipette } from 'lucide-react';
 import { useIngredients, useIngredientsCount, useProducts, useProductsCount } from '@/hooks/useIngredients';
 import { useIngredientFilters } from '@/hooks/useIngredientFilters';
@@ -11,11 +11,19 @@ import { Button } from '@/components/ui/button';
 
 type TabView = 'ingredients' | 'products';
 
-export const OptimizedIngredientDatabase = () => {
-  const [activeTab, setActiveTab] = useState<TabView>('ingredients');
+interface OptimizedIngredientDatabaseProps {
+  initialTab?: TabView;
+}
+
+export const OptimizedIngredientDatabase = ({ initialTab = 'ingredients' }: OptimizedIngredientDatabaseProps) => {
+  const [activeTab, setActiveTab] = useState<TabView>(initialTab);
   const [productSearch, setProductSearch] = useState('');
   const [productPage, setProductPage] = useState(1);
   const productsPerPage = 10;
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   // For cross-navigation between tabs
   const [expandedIngredientId, setExpandedIngredientId] = useState<string | null>(null);

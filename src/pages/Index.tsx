@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { FaceModel } from '@/components/FaceModel';
 import { OptimizedIngredientDatabase } from '@/components/OptimizedIngredientDatabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -18,8 +18,12 @@ import { toast } from 'sonner';
 const Index = () => {
   const { session, user, signOut, loading } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [loginOpen, setLoginOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+
+  const initialTab =
+    ((location.state as { tab?: 'ingredients' | 'products' } | null)?.tab) || 'ingredients';
 
   const handleSignOut = async () => {
     try {
@@ -56,7 +60,7 @@ const Index = () => {
                 <>
                   <DropdownMenuLabel className="font-normal">
                     <div className="flex flex-col space-y-1">
-                      <p className="text-sm font-medium leading-none">{user.full_name || 'User'}</p>
+                      <p className="text-sm font-medium leading-none">{user.username || 'User'}</p>
                       <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
                     </div>
                   </DropdownMenuLabel>
@@ -105,7 +109,7 @@ const Index = () => {
       {/* Compact Ingredient Database Overlay - Fixed on the right */}
       <div className="fixed top-0 right-0 w-96 h-screen p-4 pointer-events-none z-10">
         <div className="bg-white/95 backdrop-blur-sm rounded-lg shadow-2xl h-full overflow-hidden pointer-events-auto">
-          <OptimizedIngredientDatabase />
+          <OptimizedIngredientDatabase initialTab={initialTab} />
         </div>
       </div>
     </div>

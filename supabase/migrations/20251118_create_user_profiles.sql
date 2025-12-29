@@ -2,10 +2,10 @@
 CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT UNIQUE NOT NULL,
-  full_name TEXT,
+  username TEXT,
   avatar_url TEXT,
   bio TEXT,
-  skin_type TEXT, -- e.g., "dry", "oily", "combination", "sensitive", "normal"
+  skin_type TEXT[], -- e.g., ["dry"], ["oily"], ["combination"]
   skin_concerns TEXT[], -- Array of concerns, e.g., ["acne", "wrinkles", "dryness"]
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -98,11 +98,11 @@ EXECUTE FUNCTION update_profiles_updated_at();
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.profiles (id, email, full_name, avatar_url)
+  INSERT INTO public.profiles (id, email, username, avatar_url)
   VALUES (
     NEW.id,
     NEW.email,
-    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email),
+    COALESCE(NEW.raw_user_meta_data->>'username', NEW.raw_user_meta_data->>'full_name', NEW.email),
     NEW.raw_user_meta_data->>'avatar_url'
   );
   RETURN NEW;

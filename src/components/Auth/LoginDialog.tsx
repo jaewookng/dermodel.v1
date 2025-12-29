@@ -104,8 +104,8 @@ export const LoginDialog = ({ open, onOpenChange }: LoginDialogProps) => {
               <DialogTitle>{isSignUp ? 'Create Account' : 'Sign In'}</DialogTitle>
               <DialogDescription>
                 {isSignUp
-                  ? 'Create an account to save your favorite ingredients and track your skincare journey.'
-                  : 'Sign in to access your saved ingredients and preferences.'}
+                  ? 'Create an account to save favorite products and track your skincare journey.'
+                  : 'Sign in to access your saved products and preferences.'}
               </DialogDescription>
             </DialogHeader>
 

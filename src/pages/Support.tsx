@@ -58,9 +58,9 @@ export const Support = () => {
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
-                <p className="font-medium text-sm">How do I save an ingredient?</p>
+                <p className="font-medium text-sm">How do I save a product?</p>
                 <p className="text-sm text-gray-600">
-                  Click the heart icon next to any ingredient to add it to your favorites.
+                  Tap the heart icon next to a product to add it to your favorites list.
                 </p>
               </div>
               <div>

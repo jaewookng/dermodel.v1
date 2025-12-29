@@ -2,9 +2,8 @@ import { useState, Fragment, useEffect } from 'react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { IngredientProducts } from './IngredientProducts';
-import { IngredientFavoriteButton } from './IngredientFavoriteButton';
 import { ProcessedIngredient } from '@/lib/ingredientProcessor';
+import { IngredientProducts } from './IngredientProducts';
 
 interface IngredientTableProps {
   ingredients: ProcessedIngredient[];
@@ -41,7 +40,6 @@ export const IngredientTable = ({ ingredients, onProductClick, expandedId }: Ing
             <TableHead className="w-10 p-2"></TableHead>
             <TableHead className="p-2 text-xs font-medium text-gray-700">Name</TableHead>
             <TableHead className="p-2 text-xs font-medium text-gray-700">Found in..</TableHead>
-            <TableHead className="w-10 p-2"></TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -70,13 +68,10 @@ export const IngredientTable = ({ ingredients, onProductClick, expandedId }: Ing
                       {ingredient.productCount || 0} products
                     </span>
                   </TableCell>
-                  <TableCell className="p-2 pointer-events-auto text-right">
-                    <IngredientFavoriteButton ingredientName={ingredient.name} />
-                  </TableCell>
                 </TableRow>
                 {isExpanded && (
                   <TableRow className="pointer-events-auto">
-                    <TableCell colSpan={4} className="p-3 bg-gray-50 pointer-events-auto">
+                    <TableCell colSpan={3} className="p-3 bg-gray-50 pointer-events-auto">
                       <div className="space-y-2 text-xs pointer-events-auto">
                         <IngredientProducts ingredientId={ingredient.id} onProductClick={onProductClick} />
                       </div>

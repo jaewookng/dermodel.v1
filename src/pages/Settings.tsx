@@ -13,10 +13,11 @@ export const Settings = () => {
   const { user, updateProfile } = useAuth()
   const navigate = useNavigate()
 
-  const [username, setUsername] = useState(user?.full_name || '')
+  const [username, setUsername] = useState(user?.username || '')
   const [bio, setBio] = useState(user?.bio || '')
   const [loading, setLoading] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [saved, setSaved] = useState(false)
 
   if (!user) {
     return (
@@ -30,11 +31,13 @@ export const Settings = () => {
   const handleSaveProfile = async () => {
     try {
       setLoading(true)
+      setSaved(false)
       await updateProfile({
-        full_name: username,
+        username,
         bio,
       })
       toast.success('Profile updated successfully')
+      setSaved(true)
     } catch (error) {
       console.error('Failed to update profile:', error)
       toast.error('Failed to update profile')
@@ -139,6 +142,9 @@ export const Settings = () => {
                 'Save Profile'
               )}
             </Button>
+            {saved && (
+              <p className="text-sm text-green-700 text-center mt-1">Changes have been saved.</p>
+            )}
           </CardContent>
         </Card>
 

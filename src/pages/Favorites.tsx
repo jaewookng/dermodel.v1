@@ -1,6 +1,5 @@
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
-import { useIngredientFavorites } from '@/hooks/useIngredientFavorites'
 import { useProductFavorites } from '@/hooks/useProductFavorites'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -11,7 +10,6 @@ import { toast } from 'sonner'
 export const Favorites = () => {
   const { session } = useAuth()
   const navigate = useNavigate()
-  const { favorites, loading, removeFavorite } = useIngredientFavorites()
   const {
     favorites: productFavorites,
     loading: productsLoading,
@@ -25,16 +23,6 @@ export const Favorites = () => {
         <Button onClick={() => navigate('/')}>Back to Home</Button>
       </div>
     )
-  }
-
-  const handleRemoveFavorite = async (ingredientName: string) => {
-    try {
-      await removeFavorite.mutateAsync(ingredientName)
-      toast.success('Removed from favorites')
-    } catch (error) {
-      console.error('Failed to remove favorite:', error)
-      toast.error('Failed to remove favorite')
-    }
   }
 
   const handleRemoveProductFavorite = async (productId: string) => {
@@ -85,7 +73,7 @@ export const Favorites = () => {
                 <Heart className="h-10 w-10 text-gray-300 mb-3" />
                 <h3 className="text-base font-semibold mb-1">No favorite products yet</h3>
                 <p className="text-gray-600 mb-4 text-sm">Like products from the Products tab</p>
-                <Button onClick={() => navigate('/')}>Explore</Button>
+                <Button onClick={() => navigate('/', { state: { tab: 'products' as const } })}>Explore</Button>
               </CardContent>
             </Card>
           ) : (
@@ -125,74 +113,6 @@ export const Favorites = () => {
             </div>
           )}
         </div>
-
-        {/* Favorite Ingredients */}
-        <div>
-          <div className="flex items-baseline justify-between mb-3">
-            <h2 className="text-xl font-semibold">Favorite Ingredients</h2>
-            <p className="text-sm text-gray-500">{favorites.length} saved</p>
-          </div>
-
-          {loading ? (
-            <Card>
-              <CardContent className="flex items-center justify-center py-8">
-                <p className="text-gray-600">Loading favorite ingredients...</p>
-              </CardContent>
-            </Card>
-          ) : favorites.length === 0 ? (
-            <Card>
-              <CardContent className="flex flex-col items-center justify-center py-10">
-                <Heart className="h-10 w-10 text-gray-300 mb-3" />
-                <h3 className="text-base font-semibold mb-1">No favorite ingredients yet</h3>
-                <p className="text-gray-600 mb-4 text-sm">Like ingredients from the Ingredients tab</p>
-                <Button onClick={() => navigate('/')}>Explore</Button>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid gap-4">
-              {favorites.map((favorite) => (
-                <Card key={favorite.id} className="hover:shadow-md transition-shadow">
-                  <CardContent className="pt-6 flex items-center justify-between">
-                    <div className="flex-1">
-                      <h3 className="text-lg font-semibold">{favorite.ingredient_name}</h3>
-                      {favorite.notes && (
-                        <p className="text-sm text-gray-600 mt-1">{favorite.notes}</p>
-                      )}
-                      <div className="flex items-center gap-2 mt-2">
-                        <Badge variant="outline" className="text-xs">
-                          Added {new Date(favorite.created_at).toLocaleDateString()}
-                        </Badge>
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleRemoveFavorite(favorite.ingredient_name)}
-                      disabled={removeFavorite.isPending}
-                    >
-                      <Trash2 className="h-4 w-4 text-red-500" />
-                    </Button>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Stats */}
-        {(favorites.length > 0 || productFavorites.length > 0) && (
-          <Card className="mt-8 bg-blue-50 border-blue-200">
-            <CardContent className="pt-6">
-              <p className="text-sm text-gray-700">
-                You have{' '}
-                <strong className="text-blue-900">
-                  {productFavorites.length + favorites.length}
-                </strong>{' '}
-                favorites saved
-              </p>
-            </CardContent>
-          </Card>
-        )}
       </div>
     </div>
   )
