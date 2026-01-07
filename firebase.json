@@ -1,0 +1,19 @@
+{
+  "hosting": {
+    "public": "dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {
+          "serviceId": "dermodel-v1",
+          "region": "europe-west1"
+        }
+      }
+    ]
+  }
+}
