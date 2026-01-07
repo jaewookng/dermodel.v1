@@ -65,6 +65,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return
     }
 
+    const fallback = getFallbackProfileFromSession(currentSession)
+    if (fallback) {
+      setUser((prev) => (prev && prev.id === fallback.id ? prev : fallback))
+    }
+
     const userId = currentSession.user.id
     const email = currentSession.user.email || ''
 
@@ -81,7 +86,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return
       }
 
-      const fallback = getFallbackProfileFromSession(currentSession)
       if (!fallback) return
 
       const { data: upserted, error: upsertError } = await supabase

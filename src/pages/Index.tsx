@@ -38,6 +38,15 @@ const Index = () => {
     }
   };
 
+  const displayName =
+    user?.username ||
+    user?.email ||
+    session?.user?.user_metadata?.username ||
+    session?.user?.user_metadata?.full_name ||
+    session?.user?.user_metadata?.name ||
+    'User';
+  const displayEmail = user?.email || session?.user?.email || '';
+
   return (
     <div className="min-h-screen overflow-hidden" style={{ backgroundColor: 'white' }}>
       {/* Header with Service Name and Auth Menu */}
@@ -56,12 +65,14 @@ const Index = () => {
             <DropdownMenuContent align="start" className="w-56">
               {loading ? (
                 <DropdownMenuItem disabled>Loading...</DropdownMenuItem>
-              ) : session && user ? (
+              ) : session ? (
                 <>
                   <DropdownMenuLabel className="font-normal">
                     <div className="flex flex-col space-y-1">
-                      <p className="text-sm font-medium leading-none">{user.username || 'User'}</p>
-                      <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
+                      <p className="text-sm font-medium leading-none">{displayName}</p>
+                      {displayEmail ? (
+                        <p className="text-xs leading-none text-muted-foreground">{displayEmail}</p>
+                      ) : null}
                     </div>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
