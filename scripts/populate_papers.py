@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Semantic Scholar Paper Fetcher for Dermodel
-Populates ingredient_references_master table with research papers
+Populates public.papers table with research papers
 
 Usage:
     python populate_papers.py
@@ -10,12 +10,13 @@ Features:
     - Fetches top 4 papers per ingredient from Semantic Scholar
     - Checkpointing: safe to stop and resume
     - Rate limiting: 3 second delay between requests
-    - Deduplication: skips duplicate DOIs
+    - Deduplication: skips duplicate titles per ingredient
 """
 
 import os
 import json
 import time
+import uuid
 import requests
 from datetime import datetime
 
@@ -48,6 +49,8 @@ SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_KEY", "vNYFA7adXT91a
 CHECKPOINT_FILE = "checkpoint.json"
 BATCH_SIZE = 100  # checkpoint every N ingredients
 LOG_FILE = "populate_papers.log"
+PAPERS_TABLE = "papers"
+MAP_YEAR_TO_PUBLISHED_AT = True
 
 # ============================================================================
 # SUPABASE CLIENT
@@ -70,7 +73,7 @@ def log(message: str):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_line = f"[{timestamp}] {message}"
     print(log_line)
-    with open(LOG_FILE, "a") as f:
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(log_line + "\n")
 
 
@@ -101,84 +104,49 @@ def save_checkpoint(data: dict):
 # ============================================================================
 
 def fetch_all_ingredients() -> list:
-    """Fetch all unique ingredient names from both FDA and COSING tables"""
+    """Fetch all unique ingredient names from sss_ingredients table"""
     log("Fetching ingredient names from database...")
 
-    fda_names = set()
-    cosing_names = set()
+    ingredient_names = set()
 
     if USE_SUPABASE_PY:
-        # Fetch ALL FDA ingredients with pagination
-        log("  Fetching FDA ingredients...")
+        # Fetch ALL SSS ingredients with pagination
+        log("  Fetching SSS ingredients...")
         offset = 0
         page_size = 1000
         while True:
-            response = supabase.table("ingredients").select("INGREDIENT_NAME").range(offset, offset + page_size - 1).execute()
+            response = supabase.table("sss_ingredients").select("ingredient_name").range(offset, offset + page_size - 1).execute()
             if not response.data:
                 break
             for row in response.data:
-                if row.get("INGREDIENT_NAME"):
-                    fda_names.add(row["INGREDIENT_NAME"])
+                if row.get("ingredient_name"):
+                    ingredient_names.add(row["ingredient_name"])
             if len(response.data) < page_size:
                 break
             offset += page_size
-            log(f"    ... fetched {len(fda_names)} FDA ingredients so far")
-        log(f"  FDA ingredients: {len(fda_names)}")
-
-        # Fetch ALL COSING ingredients with pagination
-        log("  Fetching COSING ingredients...")
-        offset = 0
-        while True:
-            response = supabase.table("COSING_ingredients").select('"INCI name"').range(offset, offset + page_size - 1).execute()
-            if not response.data:
-                break
-            for row in response.data:
-                if row.get("INCI name"):
-                    cosing_names.add(row["INCI name"])
-            if len(response.data) < page_size:
-                break
-            offset += page_size
-            log(f"    ... fetched {len(cosing_names)} COSING ingredients so far")
-        log(f"  COSING ingredients: {len(cosing_names)}")
+            log(f"    ... fetched {len(ingredient_names)} SSS ingredients so far")
+        log(f"  SSS ingredients: {len(ingredient_names)}")
     else:
         # REST API fallback with pagination
-        log("  Fetching FDA ingredients...")
+        log("  Fetching SSS ingredients...")
         offset = 0
         page_size = 1000
         while True:
-            fda_url = f"{SUPABASE_URL}/rest/v1/ingredients?select=INGREDIENT_NAME&offset={offset}&limit={page_size}"
-            fda_response = requests.get(fda_url, headers=supabase_headers)
-            data = fda_response.json()
+            url = f"{SUPABASE_URL}/rest/v1/sss_ingredients?select=ingredient_name&offset={offset}&limit={page_size}"
+            response = requests.get(url, headers=supabase_headers)
+            data = response.json()
             if not data:
                 break
             for row in data:
-                if row.get("INGREDIENT_NAME"):
-                    fda_names.add(row["INGREDIENT_NAME"])
+                if row.get("ingredient_name"):
+                    ingredient_names.add(row["ingredient_name"])
             if len(data) < page_size:
                 break
             offset += page_size
-            log(f"    ... fetched {len(fda_names)} FDA ingredients so far")
-        log(f"  FDA ingredients: {len(fda_names)}")
+            log(f"    ... fetched {len(ingredient_names)} SSS ingredients so far")
+        log(f"  SSS ingredients: {len(ingredient_names)}")
 
-        log("  Fetching COSING ingredients...")
-        offset = 0
-        while True:
-            cosing_url = f'{SUPABASE_URL}/rest/v1/COSING_ingredients?select="INCI name"&offset={offset}&limit={page_size}'
-            cosing_response = requests.get(cosing_url, headers=supabase_headers)
-            data = cosing_response.json()
-            if not data:
-                break
-            for row in data:
-                if row.get("INCI name"):
-                    cosing_names.add(row["INCI name"])
-            if len(data) < page_size:
-                break
-            offset += page_size
-            log(f"    ... fetched {len(cosing_names)} COSING ingredients so far")
-        log(f"  COSING ingredients: {len(cosing_names)}")
-
-    # Combine and deduplicate
-    all_names = list(fda_names | cosing_names)
+    all_names = list(ingredient_names)
     all_names.sort()
 
     log(f"Total unique ingredients: {len(all_names)}")
@@ -202,8 +170,10 @@ def insert_papers(papers: list) -> int:
         # Insert one by one with duplicate check by title + ingredient_name
         for paper in valid_papers:
             try:
+                if not paper.get("id"):
+                    paper["id"] = str(uuid.uuid4())
                 # Check if paper already exists (by title + ingredient)
-                existing = supabase.table("ingredient_references_master").select("id").eq(
+                existing = supabase.table(PAPERS_TABLE).select("id").eq(
                     "ingredient_name", paper["ingredient_name"]
                 ).eq("title", paper["title"]).execute()
 
@@ -212,16 +182,18 @@ def insert_papers(papers: list) -> int:
                     continue
 
                 # Insert new paper
-                supabase.table("ingredient_references_master").insert(paper).execute()
+                supabase.table(PAPERS_TABLE).insert(paper).execute()
                 inserted += 1
             except Exception as e:
                 if "duplicate" not in str(e).lower():
                     log(f"    Failed to insert paper: {e}")
     else:
         # REST API fallback
-        url = f"{SUPABASE_URL}/rest/v1/ingredient_references_master"
+        url = f"{SUPABASE_URL}/rest/v1/{PAPERS_TABLE}"
         for paper in valid_papers:
             try:
+                if not paper.get("id"):
+                    paper["id"] = str(uuid.uuid4())
                 # Check if exists first
                 check_url = f"{url}?ingredient_name=eq.{requests.utils.quote(paper['ingredient_name'])}&title=eq.{requests.utils.quote(paper['title'])}&select=id"
                 check_response = requests.get(check_url, headers=supabase_headers)
@@ -313,21 +285,25 @@ def transform_paper(paper: dict, ingredient_name: str) -> dict:
     if not url and paper.get("paperId"):
         url = f"https://www.semanticscholar.org/paper/{paper['paperId']}"
 
-    # Truncate long abstracts
-    summary = paper.get("abstract", "")
-    if summary and len(summary) > 2000:
-        summary = summary[:1997] + "..."
+    published_at = None
+    if MAP_YEAR_TO_PUBLISHED_AT and paper.get("year"):
+        published_at = f"{paper['year']}-01-01"
+
+    arxiv_id = None
+    if paper.get("externalIds"):
+        arxiv_id = paper["externalIds"].get("ArXiv") or paper["externalIds"].get("arXiv")
 
     return {
-        "ingredient_name": ingredient_name.strip(),  # Strip whitespace
+        "ingredient_name": ingredient_name,
         "title": paper.get("title"),
         "authors": authors or None,
         "journal": paper.get("venue") or None,
-        "year": paper.get("year"),
         "doi": doi,
         "url": url,
-        "summary": summary or None,
-        "source": "semantic_scholar"
+        "published_at": published_at,
+        "issue": None,
+        "volume": None,
+        "arxiv_id": arxiv_id
     }
 
 

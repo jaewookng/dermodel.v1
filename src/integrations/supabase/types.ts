@@ -82,6 +82,57 @@ export type Database = {
           }
         ]
       }
+      papers: {
+        Row: {
+          id: string
+          doi: string | null
+          arxiv_id: string | null
+          url: string | null
+          title: string | null
+          authors: string | null
+          published_at: string | null
+          journal: string | null
+          volume: string | null
+          issue: string | null
+          pages: string | null
+          storage_path: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          doi?: string | null
+          arxiv_id?: string | null
+          url?: string | null
+          title?: string | null
+          authors?: string | null
+          published_at?: string | null
+          journal?: string | null
+          volume?: string | null
+          issue?: string | null
+          pages?: string | null
+          storage_path?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          doi?: string | null
+          arxiv_id?: string | null
+          url?: string | null
+          title?: string | null
+          authors?: string | null
+          published_at?: string | null
+          journal?: string | null
+          volume?: string | null
+          issue?: string | null
+          pages?: string | null
+          storage_path?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       sss_ingredients: {
         Row: {
           ingredient_id: string
@@ -108,16 +159,19 @@ export type Database = {
           product_id: string
           product_name: string
           ingredient_count: number | null
+          image_url: string | null
         }
         Insert: {
           product_id: string
           product_name: string
           ingredient_count?: number | null
+          image_url?: string | null
         }
         Update: {
           product_id?: string
           product_name?: string
           ingredient_count?: number | null
+          image_url?: string | null
         }
         Relationships: []
       }
