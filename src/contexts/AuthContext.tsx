@@ -65,11 +65,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return
     }
 
-    const fallback = getFallbackProfileFromSession(currentSession)
-    if (fallback) {
-      setUser((prev) => (prev && prev.id === fallback.id ? prev : fallback))
-    }
-
     const userId = currentSession.user.id
     const email = currentSession.user.email || ''
 
@@ -82,31 +77,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (error) throw error
       if (data) {
-        setUser(data)
+        setUser(data) // Set ONCE with DB data
         return
       }
 
-      if (!fallback) return
+      // No profile - create it
+      const fallback = getFallbackProfileFromSession(currentSession)
+      if (!fallback) {
+        setUser(null)
+        return
+      }
 
       const { data: upserted, error: upsertError } = await supabase
         .from('profiles')
         .upsert(
-          {
-            id: userId,
-            email,
-            username: fallback.username,
-            avatar_url: fallback.avatar_url,
-          },
+          { id: userId, email, username: fallback.username, avatar_url: fallback.avatar_url },
           { onConflict: 'id' }
         )
         .select('*')
         .single()
 
       if (upsertError) throw upsertError
-      setUser(upserted)
+      setUser(upserted || fallback) // Set ONCE with created data
+      
     } catch (error) {
       console.error('Failed to load profile:', error)
-      setUser(getFallbackProfileFromSession(currentSession))
+      setUser(getFallbackProfileFromSession(currentSession)) // Set ONCE on error
     }
   }
 

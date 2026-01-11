@@ -126,10 +126,13 @@ export const useIngredients = (filters: FilterParams = {}) => {
         throw error;
       }
     },
+    enabled: true,
     retry: 2,
     retryDelay: 500,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 10 * 60 * 1000, // 10 minutes
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
   });
 };
 
@@ -146,8 +149,11 @@ export const useIngredientsCount = () => {
 
       return count || 0;
     },
+    enabled: true,
     staleTime: 10 * 60 * 1000, // 10 minutes
     gcTime: 30 * 60 * 1000, // 30 minutes
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
   });
 };
 
@@ -195,8 +201,11 @@ export const useProducts = () => {
       console.log('✅ Fetched all products:', allProducts.length);
       return allProducts;
     },
+    enabled: true,
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
   });
 };
 
@@ -213,7 +222,10 @@ export const useProductsCount = () => {
 
       return count || 0;
     },
+    enabled: true,
     staleTime: 10 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
   });
 };
