@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { supabasePublic } from '@/integrations/supabase/publicClient';
 
 interface IngredientInfo {
   ingredient_id: string;
@@ -18,7 +18,7 @@ export const useProductIngredients = (productId: string | undefined) => {
     queryFn: async () => {
       if (!productId) return [];
 
-      const { data, error } = await supabase
+      const { data, error } = await supabasePublic
         .from('sss_product_ingredients_join')
         .select(`
           position,

@@ -1,4 +1,4 @@
-import { useCallback, useState, useMemo, useEffect } from 'react';
+import { useCallback, useState, useMemo, useEffect, memo } from 'react';
 import { Database, Search, Pipette } from 'lucide-react';
 import { useIngredients, useIngredientsCount, useProducts, useProductsCount } from '@/hooks/useIngredients';
 import { useIngredientFilters } from '@/hooks/useIngredientFilters';
@@ -15,7 +15,9 @@ interface OptimizedIngredientDatabaseProps {
   initialTab?: TabView;
 }
 
-export const OptimizedIngredientDatabase = ({ initialTab = 'ingredients' }: OptimizedIngredientDatabaseProps) => {
+const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
+  initialTab = 'ingredients',
+}: OptimizedIngredientDatabaseProps) {
   const [activeTab, setActiveTab] = useState<TabView>(initialTab);
   const [productSearch, setProductSearch] = useState('');
   const [productPage, setProductPage] = useState(1);
@@ -323,4 +325,6 @@ export const OptimizedIngredientDatabase = ({ initialTab = 'ingredients' }: Opti
       )}
     </div>
   );
-};
+});
+
+export { OptimizedIngredientDatabase };

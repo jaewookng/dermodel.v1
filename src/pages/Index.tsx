@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { FaceModel } from '@/components/FaceModel';
 import { OptimizedIngredientDatabase } from '@/components/OptimizedIngredientDatabase';
@@ -17,6 +17,9 @@ import { toast } from 'sonner';
 
 const Index = () => {
   const { session, user, signOut, loading } = useAuth();
+  useEffect(() => {
+    console.log('Index render - loading:', loading, 'user:', user, 'session:', !!session);
+  }, [loading, user, session]);
   const navigate = useNavigate();
   const location = useLocation();
   const [loginOpen, setLoginOpen] = useState(false);

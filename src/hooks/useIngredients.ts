@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { supabasePublic } from '@/integrations/supabase/publicClient';
 import { ProcessedIngredient } from '@/lib/ingredientProcessor';
 
 interface FilterParams {
@@ -39,7 +39,7 @@ export const useIngredients = (filters: FilterParams = {}) => {
         while (true) {
           console.log(`📦 Fetching ingredients batch: range(${from}, ${from + batchSize - 1})`);
 
-          const { data, error } = await supabase
+          const { data, error } = await supabasePublic
             .from('sss_ingredients')
             .select('*')
             .order('ingredient_name', { ascending: true })
@@ -141,7 +141,7 @@ export const useIngredientsCount = () => {
   return useQuery({
     queryKey: ['ingredients-count'],
     queryFn: async () => {
-      const { count, error } = await supabase
+      const { count, error } = await supabasePublic
         .from('sss_ingredients')
         .select('*', { count: 'exact', head: true });
 
@@ -171,7 +171,7 @@ export const useProducts = () => {
       while (true) {
         console.log(`📦 Fetching products batch: range(${from}, ${from + batchSize - 1})`);
 
-        const { data, error } = await supabase
+        const { data, error } = await supabasePublic
           .from('sss_products')
           .select('*')
           .order('product_name', { ascending: true })
@@ -214,7 +214,7 @@ export const useProductsCount = () => {
   return useQuery({
     queryKey: ['products-count'],
     queryFn: async () => {
-      const { count, error } = await supabase
+      const { count, error } = await supabasePublic
         .from('sss_products')
         .select('*', { count: 'exact', head: true });
 

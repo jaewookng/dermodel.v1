@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react'
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Session } from '@supabase/supabase-js'
 import { supabase } from '@/integrations/supabase/client'
 import type { Database } from '@/integrations/supabase/types'
@@ -58,11 +58,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null)
   const [user, setUser] = useState<ProfileRow | null>(null)
   const [loading, setLoading] = useState(true)
+  const initializingRef = useRef(true)
 
-  const loadProfile = async (currentSession: Session | null) => {
+  const loadProfile = async (currentSession: Session | null): Promise<ProfileRow | null> => {
     if (!currentSession?.user) {
-      setUser(null)
-      return
+      return null
     }
 
     const userId = currentSession.user.id
@@ -77,15 +77,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (error) throw error
       if (data) {
-        setUser(data) // Set ONCE with DB data
-        return
+        return data
       }
 
       // No profile - create it
       const fallback = getFallbackProfileFromSession(currentSession)
       if (!fallback) {
-        setUser(null)
-        return
+        return null
       }
 
       const { data: upserted, error: upsertError } = await supabase
@@ -98,28 +96,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .single()
 
       if (upsertError) throw upsertError
-      setUser(upserted || fallback) // Set ONCE with created data
-      
+      return upserted || fallback
     } catch (error) {
       console.error('Failed to load profile:', error)
-      setUser(getFallbackProfileFromSession(currentSession)) // Set ONCE on error
+      return getFallbackProfileFromSession(currentSession)
     }
   }
 
+  const resolveProfile = async (currentSession: Session | null): Promise<ProfileRow | null> => {
+    if (!currentSession?.user) return null
+    const profile = await loadProfile(currentSession)
+    return profile ?? getFallbackProfileFromSession(currentSession)
+  }
+
+  const resolvedUser = user ?? getFallbackProfileFromSession(session)
+
   useEffect(() => {
+    const applySession = async (currentSession: Session | null) => {
+      setSession(currentSession)
+      const profile = await resolveProfile(currentSession)
+      setUser(profile)
+    }
+
     const initializeAuth = async () => {
       try {
-        const { data: { session: currentSession }, error: sessionError } = await supabase.auth.getSession()
-
-        if (sessionError) {
-          console.error('Session error:', sessionError)
-        }
-
-        setSession(currentSession)
-        await loadProfile(currentSession)
+        const { data: { session: initialSession }, error: sessionError } = await supabase.auth.getSession()
+        if (sessionError) console.error('Session error:', sessionError)
+        await applySession(initialSession)
       } catch (error) {
         console.error('Failed to initialize auth:', error)
       } finally {
+        initializingRef.current = false
         setLoading(false)
       }
     }
@@ -130,8 +137,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       console.log('Auth state changed:', event)
-      setSession(newSession)
-      await loadProfile(newSession)
+      if (initializingRef.current) return
+      try {
+        await applySession(newSession)
+      } catch (error) {
+        console.error('Failed to apply auth state change:', error)
+      }
     })
 
     return () => subscription?.unsubscribe()
@@ -170,8 +181,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signOut = async () => {
     const { error } = await supabase.auth.signOut()
     if (error) throw error
-    setSession(null)
-    setUser(null)
   }
 
   const updateProfile: AuthContextType['updateProfile'] = async (updates) => {
@@ -210,7 +219,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider
       value={{
         session,
-        user,
+        user: resolvedUser,
         loading,
         signInWithGoogle,
         signInWithEmail,

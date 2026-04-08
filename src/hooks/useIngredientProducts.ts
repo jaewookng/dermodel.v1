@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { supabasePublic } from '@/integrations/supabase/publicClient';
 
 export interface ProductInfo {
   product_id: string;
@@ -15,7 +15,7 @@ export const useIngredientProducts = (ingredientId: string | undefined) => {
       if (!ingredientId) return [];
 
       // Fetch products for this ingredient by joining the junction table
-      const { data, error } = await supabase
+      const { data, error } = await supabasePublic
         .from('sss_product_ingredients_join')
         .select(`
           position,
