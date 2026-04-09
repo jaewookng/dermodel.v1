@@ -6,6 +6,25 @@ export type Json =
   | { [key: string]: Json | undefined }
   | Json[]
 
+export type SkinType =
+  | 'dry'
+  | 'oily'
+  | 'combination'
+  | 'normal'
+  | 'sensitive';
+
+export type SkinConcern =
+  | 'acne'
+  | 'aging'
+  | 'hyperpigmentation'
+  | 'redness'
+  | 'dehydration'
+  | 'sensitivity'
+  | 'pores'
+  | 'dullness'
+  | 'texture'
+  | 'oiliness';
+
 export type Database = {
   public: {
     Tables: {
@@ -16,8 +35,8 @@ export type Database = {
           username: string | null
           avatar_url: string | null
           bio: string | null
-          skin_type: string[] | null
-          skin_concerns: string[] | null
+          skin_type: SkinType[] | null
+          skin_concerns: SkinConcern[] | null
           created_at: string
           updated_at: string
         }
@@ -27,8 +46,8 @@ export type Database = {
           username?: string | null
           avatar_url?: string | null
           bio?: string | null
-          skin_type?: string[] | null
-          skin_concerns?: string[] | null
+          skin_type?: SkinType[] | null
+          skin_concerns?: SkinConcern[] | null
           created_at?: string
           updated_at?: string
         }
@@ -38,8 +57,8 @@ export type Database = {
           username?: string | null
           avatar_url?: string | null
           bio?: string | null
-          skin_type?: string[] | null
-          skin_concerns?: string[] | null
+          skin_type?: SkinType[] | null
+          skin_concerns?: SkinConcern[] | null
           created_at?: string
           updated_at?: string
         }

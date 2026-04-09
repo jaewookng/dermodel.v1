@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { Session } from '@supabase/supabase-js'
 import { supabase } from '@/integrations/supabase/client'
-import type { Database } from '@/integrations/supabase/types'
+import type { Database, SkinType, SkinConcern } from '@/integrations/supabase/types'
 
 type ProfileRow = Database['public']['Tables']['profiles']['Row']
 type ProfileInsert = Database['public']['Tables']['profiles']['Insert']
@@ -43,15 +43,15 @@ const getFallbackProfileFromSession = (session: Session | null): ProfileRow | nu
   }
 }
 
-const normalizeSkinType = (value: string | string[] | null | undefined): string[] | null | undefined => {
+const normalizeSkinType = (value: string | string[] | null | undefined): SkinType[] | null | undefined => {
   if (value === undefined) return undefined
   if (value === null) return null
   if (Array.isArray(value)) {
     const cleaned = value.map((v) => v.trim()).filter(Boolean)
-    return cleaned.length ? cleaned : null
+    return cleaned.length ? (cleaned as SkinType[]) : null
   }
   const cleaned = value.trim()
-  return cleaned ? [cleaned] : null
+  return cleaned ? ([cleaned] as SkinType[]) : null
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -198,7 +198,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (updates.username !== undefined) payload.username = updates.username
     if (updates.avatar_url !== undefined) payload.avatar_url = updates.avatar_url
     if (updates.bio !== undefined) payload.bio = updates.bio
-    if (updates.skin_concerns !== undefined) payload.skin_concerns = updates.skin_concerns
+    if (updates.skin_concerns !== undefined) {
+      payload.skin_concerns = updates.skin_concerns as SkinConcern[]
+    }
 
     if ('skin_type' in updates) {
       payload.skin_type = normalizeSkinType(updates.skin_type)
