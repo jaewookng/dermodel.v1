@@ -4,14 +4,16 @@ import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { ProcessedIngredient } from '@/lib/ingredientProcessor';
 import { IngredientProducts } from './IngredientProducts';
+import type { GraphTarget } from '@/hooks/useGraphData';
 
 interface IngredientTableProps {
   ingredients: ProcessedIngredient[];
   onProductClick?: (productId: string, productName: string) => void;
   expandedId?: string | null;
+  onOpenGraph?: (target: GraphTarget) => void;
 }
 
-export const IngredientTable = ({ ingredients, onProductClick, expandedId }: IngredientTableProps) => {
+export const IngredientTable = ({ ingredients, onProductClick, expandedId, onOpenGraph }: IngredientTableProps) => {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   // Update expanded rows when expandedId changes from parent
@@ -73,7 +75,12 @@ export const IngredientTable = ({ ingredients, onProductClick, expandedId }: Ing
                   <TableRow className="pointer-events-auto">
                     <TableCell colSpan={3} className="p-3 bg-gray-50 pointer-events-auto">
                       <div className="space-y-2 text-xs pointer-events-auto">
-                        <IngredientProducts ingredientId={ingredient.id} onProductClick={onProductClick} />
+                        <IngredientProducts
+                          ingredientId={ingredient.id}
+                          ingredientName={ingredient.name}
+                          onProductClick={onProductClick}
+                          onOpenGraph={onOpenGraph}
+                        />
                       </div>
                     </TableCell>
                   </TableRow>

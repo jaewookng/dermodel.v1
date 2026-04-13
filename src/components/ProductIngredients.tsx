@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { supabasePublic } from '@/integrations/supabase/publicClient';
+import type { GraphTarget } from '@/hooks/useGraphData';
+import { Network } from 'lucide-react';
 
 interface IngredientInfo {
   ingredient_id: string;
@@ -9,7 +11,9 @@ interface IngredientInfo {
 
 interface ProductIngredientsProps {
   productId: string;
+  productName: string;
   onIngredientClick?: (ingredientId: string, ingredientName: string) => void;
+  onOpenGraph?: (target: GraphTarget) => void;
 }
 
 export const useProductIngredients = (productId: string | undefined) => {
@@ -45,7 +49,7 @@ export const useProductIngredients = (productId: string | undefined) => {
   });
 };
 
-export const ProductIngredients = ({ productId, onIngredientClick }: ProductIngredientsProps) => {
+export const ProductIngredients = ({ productId, productName, onIngredientClick, onOpenGraph }: ProductIngredientsProps) => {
   const { data: ingredients, isLoading } = useProductIngredients(productId);
 
   if (isLoading) {
@@ -68,7 +72,18 @@ export const ProductIngredients = ({ productId, onIngredientClick }: ProductIngr
 
   return (
     <div className="pt-2">
-      <span className="font-medium text-gray-700">Ingredients ({ingredients.length}):</span>
+      <div className="flex items-center justify-between mb-1">
+        <span className="font-medium text-gray-700">Ingredients ({ingredients.length}):</span>
+        {onOpenGraph && (
+          <button
+            onClick={() => onOpenGraph({ type: 'product', id: productId, name: productName })}
+            className="flex items-center gap-1 text-[10px] text-violet-600 hover:text-violet-800 transition-colors font-medium"
+          >
+            <Network className="h-3 w-3" />
+            Graph view
+          </button>
+        )}
+      </div>
       <div className="mt-1 space-y-1">
         {ingredients.map((ingredient) => (
           <div

@@ -1,105 +1,195 @@
 # Neo4j AuraDB Migration Plan
 
-## Context
-
-Dermodel currently uses Supabase (Postgres) with join tables for ingredient-product relationships. This plan migrates to Neo4j AuraDB Free to express ingredients, products, and users as nodes with typed edges — eliminating join table overhead for multi-hop queries.
-
-**Honest tradeoff**: Flat table reads (the primary UI) perform comparably or slightly better in Postgres. Neo4j earns its keep when multi-hop traversal features are added (recommendations, similarity, skin-concern paths). This migration is best treated as **infrastructure for future graph features**, not a flat-read performance win.
-
----
-
-## AuraDB Free Tier Limits
-
-| Limit | Value |
-|---|---|
-| Nodes | 200,000 |
-| Relationships | 400,000 |
-| Storage | 200 MB |
-| RAM | 1 GB |
-| Instances | 1 |
-| Region | Fixed at creation |
-
-Estimate for current data:
-- `sss_ingredients` rows → Ingredient nodes
-- `sss_products` rows → Product nodes
-- `sss_product_ingredients_join` rows → IS_IN edges (largest volume)
-- `profiles` rows → User nodes
-- `product_favorites` rows → LIKES edges
-- `papers` rows → Paper nodes
-- `sss_ingredients_papers` rows → REFERENCED_IN edges
-
-If `sss_product_ingredients_join` exceeds ~380k rows, the free tier will not fit. Verify row counts before committing.
-
----
-
-## Target Architecture
+## Roadmap
 
 ```
-Browser (React SPA, Firebase Hosting)
-    ↓ GraphQL over HTTPS
-Firebase Cloud Functions
-    ↓ Bolt protocol (neo4j-driver)
-Neo4j AuraDB Free
+Phase 1 — Now        Supabase (current)
+                     Optimize for flat reads, collect user behavior data
+
+Phase 2 — Trigger    Sufficient LIKES signal (~hundreds of active users)
+                     Build recommendation engine on Supabase first to validate query patterns
+
+Phase 3 — Migrate    Port to Neo4j AuraDB Professional when graph traversals
+                     become the bottleneck, not before
 ```
 
-Auth moves from Supabase Auth → Firebase Auth (same Google/GitHub OAuth providers).
+Migration is **not the next step**. The graph schema and implementation details below are reference material for when Phase 3 begins.
 
 ---
 
-## Graph Schema
+## Why not migrate now
 
-### Nodes
+- 1.2M IS_IN edges exceeds AuraDB Free (400k limit) → requires Professional (~$65–175/month)
+- Primary UI is flat table reads — Postgres matches or beats Neo4j for this pattern
+- `product_favorites` (LIKES edges) is currently sparse; collaborative filtering needs signal
+- `skin_type` / `skin_concerns` enums are now normalized and ready, but user volume isn't
+- No recommendation query patterns defined yet — premature to optimize for them
+
+**Trigger for Phase 3**: recommendation queries become measurably slow in Postgres, or multi-hop traversal patterns (user → product ← ingredient → similar product) are confirmed as core features.
+
+---
+
+## Phase 1: Supabase optimizations (completed)
+
+These changes make Supabase performant now and make the future migration cleaner.
+
+| Change | Status | Migration benefit |
+|---|---|---|
+| Index on `sss_product_ingredients_join(ingredient_id)` | Done | IS_IN edge lookups by source node |
+| Server-side filter/sort/paginate in `useIngredients` | Done | Query shape maps directly to Cypher |
+| `skin_type` / `skin_concerns` as enums | Done | Graph clustering requires controlled vocabulary |
+| Stats views replacing stored `product_count` etc. | Done | Computed via traversal in graph — drop the columns |
+
+---
+
+## Phase 2: Recommendation engine on Supabase
+
+Build and validate recommendation logic in Postgres before committing to graph infrastructure. Supabase handles these with CTEs and window functions.
+
+### Collaborative filtering — users with similar skin concerns
+
+```sql
+-- Users who share skin concerns with the current user, ranked by overlap
+SELECT
+  p2.id,
+  p2.username,
+  array_length(
+    ARRAY(SELECT unnest(p1.skin_concerns) INTERSECT SELECT unnest(p2.skin_concerns)),
+    1
+  ) AS shared_concern_count
+FROM profiles p1
+JOIN profiles p2
+  ON p1.id != p2.id
+  AND p1.skin_concerns && p2.skin_concerns   -- overlap operator
+WHERE p1.id = $current_user_id
+ORDER BY shared_concern_count DESC
+LIMIT 20;
+```
+
+### Product recommendations from similar users
+
+```sql
+-- Products liked by users who share skin concerns, not yet liked by current user
+SELECT
+  sp.product_id,
+  sp.product_name,
+  COUNT(DISTINCT pf.user_id) AS liked_by_similar_users
+FROM profiles p1
+JOIN profiles p2
+  ON p1.id != p2.id
+  AND p1.skin_concerns && p2.skin_concerns
+JOIN product_favorites pf ON pf.user_id = p2.id
+JOIN sss_products sp ON sp.product_id = pf.product_id
+WHERE p1.id = $current_user_id
+  AND pf.product_id NOT IN (
+    SELECT product_id FROM product_favorites WHERE user_id = $current_user_id
+  )
+GROUP BY sp.product_id, sp.product_name
+ORDER BY liked_by_similar_users DESC
+LIMIT 10;
+```
+
+### Ingredient co-occurrence (content-based)
+
+```sql
+-- Ingredients that frequently appear alongside a given ingredient
+SELECT
+  i2.ingredient_id,
+  i2.ingredient_name,
+  COUNT(*) AS co_occurrence_count
+FROM sss_product_ingredients_join j1
+JOIN sss_product_ingredients_join j2
+  ON j1.product_id = j2.product_id
+  AND j1.ingredient_id != j2.ingredient_id
+JOIN sss_ingredients i2 ON i2.ingredient_id = j2.ingredient_id
+WHERE j1.ingredient_id = $ingredient_id
+GROUP BY i2.ingredient_id, i2.ingredient_name
+ORDER BY co_occurrence_count DESC
+LIMIT 20;
+```
+
+If these queries become slow at scale (measured, not assumed), that is the signal to migrate.
+
+---
+
+## Phase 3: Neo4j AuraDB migration
+
+### Why Neo4j wins at scale for these patterns
+
+The Phase 2 queries above are 3–4 table joins. In Neo4j they become pointer follows:
+
+```cypher
+-- Users with similar skin concerns
+MATCH (u1:User {user_id: $id})-[:HAS_CONCERN]->(c:Concern)<-[:HAS_CONCERN]-(u2:User)
+RETURN u2, count(c) AS shared ORDER BY shared DESC LIMIT 20
+
+-- Products recommended from similar users
+MATCH (u1:User {user_id: $id})-[:HAS_CONCERN]->(:Concern)<-[:HAS_CONCERN]-(u2:User)
+      -[:LIKES]->(p:Product)
+WHERE NOT (u1)-[:LIKES]->(p)
+RETURN p, count(u2) AS score ORDER BY score DESC LIMIT 10
+
+-- Ingredient co-occurrence
+MATCH (i1:Ingredient {ingredient_id: $id})-[:IS_IN]->(p:Product)<-[:IS_IN]-(i2:Ingredient)
+RETURN i2, count(p) AS co_occurrences ORDER BY co_occurrences DESC LIMIT 20
+```
+
+### AuraDB tier at migration time
+
+| Data | Volume | Node/Edge type |
+|---|---|---|
+| Ingredients | 21k | Ingredient nodes |
+| Products | 50k | Product nodes |
+| IS_IN edges | 1.2M | Exceeds Free tier |
+| User nodes | TBD at migration | User nodes |
+| LIKES edges | TBD at migration | Critical signal |
+
+Free tier (400k edges) will not fit — **AuraDB Professional required**.  
+Estimated cost at migration: $65–175/month depending on RAM tier needed.
+
+### Graph schema
 
 ```cypher
 (:Ingredient {
-  ingredient_id: String,   // PK
+  ingredient_id: String,
   ingredient_name: String
 })
 
 (:Product {
-  product_id:       String,   // PK
-  product_name:     String,
-  image_url:        String,
-  image_fetched_at: DateTime
+  product_id:   String,
+  product_name: String,
+  image_url:    String
 })
 
 (:User {
-  user_id:       String,   // maps to profiles.id
+  user_id:       String,
   username:      String,
-  avatar_url:    String,
   email:         String,
-  skin_type:     [String],
-  skin_concerns: [String],
-  bio:           String,
-  created_at:    DateTime
+  skin_type:     [String],   // SkinType enum values
+  skin_concerns: [String]    // SkinConcern enum values
+})
+
+(:Concern {
+  name: String   // normalized SkinConcern value — promoted to node for traversal
 })
 
 (:Paper {
-  paper_id:     String,   // PK
-  doi:          String,
-  arxiv_id:     String,
-  url:          String,
+  paper_id:     String,
   title:        String,
+  doi:          String,
   authors:      [String],
-  published_at: Date,
-  journal:      String,
-  volume:       String,
-  issue:        String
+  published_at: Date
 })
 ```
 
-### Relationships (edges)
-
 ```cypher
-// replaces sss_product_ingredients_join
 (:Ingredient)-[:IS_IN { position: Integer }]->(:Product)
-
-// replaces product_favorites
 (:User)-[:LIKES { notes: String, created_at: DateTime }]->(:Product)
-
-// replaces sss_ingredients_papers
-(:Ingredient)-[:REFERENCED_IN { relation_type: String, notes: String }]->(:Paper)
+(:User)-[:HAS_CONCERN]->(:Concern)
+(:Ingredient)-[:REFERENCED_IN { relation_type: String }]->(:Paper)
 ```
+
+Note: `skin_concerns` is promoted from a User property array to `(:Concern)` nodes with `HAS_CONCERN` edges. This enables the collaborative filtering traversal without array intersection operators.
 
 ### Indexes
 
@@ -107,56 +197,54 @@ Auth moves from Supabase Auth → Firebase Auth (same Google/GitHub OAuth provid
 CREATE CONSTRAINT FOR (i:Ingredient) REQUIRE i.ingredient_id IS UNIQUE;
 CREATE CONSTRAINT FOR (p:Product)    REQUIRE p.product_id IS UNIQUE;
 CREATE CONSTRAINT FOR (u:User)       REQUIRE u.user_id IS UNIQUE;
+CREATE CONSTRAINT FOR (c:Concern)    REQUIRE c.name IS UNIQUE;
 CREATE CONSTRAINT FOR (p:Paper)      REQUIRE p.paper_id IS UNIQUE;
 
-// for table-view sort/filter performance
-CREATE INDEX ingredient_name_index FOR (i:Ingredient) ON (i.ingredient_name);
-CREATE INDEX product_name_index    FOR (p:Product)    ON (p.product_name);
+CREATE INDEX FOR (i:Ingredient) ON (i.ingredient_name);
+CREATE INDEX FOR (p:Product)    ON (p.product_name);
 ```
 
-Dropped fields (computed via traversal instead):
-- `sss_ingredients.product_count` → `COUNT { (i)-[:IS_IN]->() }`
-- `sss_ingredients.avg_position` → `avg(r.position)`
-- `sss_products.ingredient_count` → `COUNT { ()-[:IS_IN]->(p) }`
+### Target architecture
 
----
+```
+Browser (React SPA, Firebase Hosting)
+    ↓ GraphQL over HTTPS
+Firebase Cloud Functions
+    ↓ Bolt protocol (neo4j-driver)
+Neo4j AuraDB Professional
+```
 
-## Service Replacement Map
+Auth stays in Supabase or moves to Firebase Auth — decision deferred to Phase 3.
+
+### Service replacement map
 
 | Supabase | Replacement |
 |---|---|
 | Postgres tables | Neo4j AuraDB |
-| Supabase Auth (Google/GitHub) | Firebase Auth |
-| `@supabase/supabase-js` client | `@apollo/client` (GraphQL) |
+| Supabase Auth | Keep Supabase Auth or move to Firebase Auth |
+| `@supabase/supabase-js` | `@apollo/client` (GraphQL) |
 | Supabase RLS | JWT verification in Cloud Function |
-| Supabase Realtime | Not replaced (polling or drop feature) |
-| Supabase Storage | Firebase Storage (if needed) |
+| Stats views | Computed via graph traversal |
 
----
+### Migration script (reference)
 
-## Migration Steps
-
-### Step 1 — Provision
-
-1. Create Neo4j AuraDB Free instance at [console.neo4j.io](https://console.neo4j.io)
-2. Save connection URI, username, and password to `.env`
-3. Enable Google and GitHub providers in Firebase Console → Authentication → Sign-in method
-
-### Step 2 — Data migration script
-
-Run once from a local Node script (not from the browser):
+Run once from a local Node script. The IS_IN edges (1.2M rows) must be chunked.
 
 ```ts
 // scripts/migrate-to-neo4j.ts
 import neo4j from "neo4j-driver";
 import { createClient } from "@supabase/supabase-js";
 
-const driver = neo4j.driver(process.env.NEO4J_URI, neo4j.auth.basic(process.env.NEO4J_USER, process.env.NEO4J_PASSWORD));
+const driver = neo4j.driver(
+  process.env.NEO4J_URI,
+  neo4j.auth.basic(process.env.NEO4J_USER, process.env.NEO4J_PASSWORD)
+);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const session = driver.session();
+const CHUNK = 10_000;
 
 // 1. Ingredients
-const { data: ingredients } = await supabase.from("sss_ingredients").select("*");
+const { data: ingredients } = await supabase.from("sss_ingredients").select("ingredient_id, ingredient_name");
 await session.run(
   `UNWIND $rows AS row
    MERGE (i:Ingredient { ingredient_id: row.ingredient_id })
@@ -165,7 +253,7 @@ await session.run(
 );
 
 // 2. Products
-const { data: products } = await supabase.from("sss_products").select("*");
+const { data: products } = await supabase.from("sss_products").select("product_id, product_name, image_url");
 await session.run(
   `UNWIND $rows AS row
    MERGE (p:Product { product_id: row.product_id })
@@ -173,47 +261,39 @@ await session.run(
   { rows: products }
 );
 
-// 3. IS_IN edges (batch in chunks if > 50k rows)
-const { data: joins } = await supabase.from("sss_product_ingredients_join").select("*");
-await session.run(
-  `UNWIND $rows AS row
-   MATCH (i:Ingredient { ingredient_id: row.ingredient_id })
-   MATCH (p:Product    { product_id:    row.product_id })
-   MERGE (i)-[:IS_IN { position: row.position }]->(p)`,
-  { rows: joins }
-);
+// 3. IS_IN edges — chunked (1.2M rows)
+let from = 0;
+while (true) {
+  const { data: joins } = await supabase
+    .from("sss_product_ingredients_join")
+    .select("product_id, ingredient_id, position")
+    .range(from, from + CHUNK - 1);
+  if (!joins?.length) break;
+  await session.run(
+    `UNWIND $rows AS row
+     MATCH (i:Ingredient { ingredient_id: row.ingredient_id })
+     MATCH (p:Product    { product_id:    row.product_id })
+     MERGE (i)-[:IS_IN { position: row.position }]->(p)`,
+    { rows: joins }
+  );
+  from += CHUNK;
+}
 
-// 4. Papers
-const { data: papers } = await supabase.from("papers").select("*");
-await session.run(
-  `UNWIND $rows AS row
-   MERGE (p:Paper { paper_id: row.id })
-   SET p.title = row.title, p.doi = row.doi, p.authors = row.authors`,
-  { rows: papers }
-);
-
-// 5. REFERENCED_IN edges
-const { data: ingredientPapers } = await supabase.from("sss_ingredients_papers").select("*");
-await session.run(
-  `UNWIND $rows AS row
-   MATCH (i:Ingredient { ingredient_id: row.ingredient_id })
-   MATCH (p:Paper      { paper_id:      row.paper_id })
-   MERGE (i)-[:REFERENCED_IN { relation_type: row.relation_type, notes: row.notes }]->(p)`,
-  { rows: ingredientPapers }
-);
-
-// 6. Users (profiles)
-const { data: profiles } = await supabase.from("profiles").select("*");
+// 4. Users + Concern nodes + HAS_CONCERN edges
+const { data: profiles } = await supabase.from("profiles").select("id, username, email, skin_type, skin_concerns");
 await session.run(
   `UNWIND $rows AS row
    MERGE (u:User { user_id: row.id })
-   SET u.username = row.username, u.email = row.email,
-       u.skin_type = row.skin_type, u.skin_concerns = row.skin_concerns`,
+   SET u.username = row.username, u.email = row.email, u.skin_type = row.skin_type
+   WITH u, row
+   UNWIND coalesce(row.skin_concerns, []) AS concern
+   MERGE (c:Concern { name: concern })
+   MERGE (u)-[:HAS_CONCERN]->(c)`,
   { rows: profiles }
 );
 
-// 7. LIKES edges
-const { data: favorites } = await supabase.from("product_favorites").select("*");
+// 5. LIKES edges
+const { data: favorites } = await supabase.from("product_favorites").select("user_id, product_id, notes");
 await session.run(
   `UNWIND $rows AS row
    MATCH (u:User    { user_id:    row.user_id })
@@ -222,277 +302,51 @@ await session.run(
   { rows: favorites }
 );
 
+// 6. Papers + REFERENCED_IN edges
+const { data: papers } = await supabase.from("papers").select("id, title, doi, authors, published_at");
+await session.run(
+  `UNWIND $rows AS row
+   MERGE (p:Paper { paper_id: row.id })
+   SET p.title = row.title, p.doi = row.doi, p.authors = row.authors, p.published_at = row.published_at`,
+  { rows: papers }
+);
+
+const { data: ingredientPapers } = await supabase.from("sss_ingredients_papers").select("ingredient_id, paper_id, relation_type, notes");
+await session.run(
+  `UNWIND $rows AS row
+   MATCH (i:Ingredient { ingredient_id: row.ingredient_id })
+   MATCH (p:Paper      { paper_id:      row.paper_id })
+   MERGE (i)-[:REFERENCED_IN { relation_type: row.relation_type, notes: row.notes }]->(p)`,
+  { rows: ingredientPapers }
+);
+
 await session.close();
 await driver.close();
 ```
 
-### Step 3 — API layer (Firebase Cloud Function)
-
-```
-functions/
-├── src/
-│   └── index.ts    ← Neo4j GraphQL server
-├── package.json
-└── tsconfig.json
-```
-
-```ts
-// functions/src/index.ts
-import { Neo4jGraphQL } from "@neo4j/graphql";
-import neo4j from "neo4j-driver";
-import { ApolloServer } from "@apollo/server";
-import { expressMiddleware } from "@apollo/server/express4";
-import * as admin from "firebase-admin";
-import { onRequest } from "firebase-functions/v2/https";
-import express from "express";
-import cors from "cors";
-
-admin.initializeApp();
-
-const driver = neo4j.driver(
-  process.env.NEO4J_URI,
-  neo4j.auth.basic(process.env.NEO4J_USER, process.env.NEO4J_PASSWORD)
-);
-
-const typeDefs = `#graphql
-  type Ingredient {
-    ingredient_id: ID! @id
-    ingredient_name: String
-    products: [Product!]! @relationship(type: "IS_IN", direction: OUT, properties: "IsInProps")
-    papers: [Paper!]! @relationship(type: "REFERENCED_IN", direction: OUT, properties: "ReferencedInProps")
-  }
-
-  type Product {
-    product_id: ID! @id
-    product_name: String
-    image_url: String
-    ingredients: [Ingredient!]! @relationship(type: "IS_IN", direction: IN, properties: "IsInProps")
-    likedBy: [User!]! @relationship(type: "LIKES", direction: IN, properties: "LikesProps")
-  }
-
-  type User {
-    user_id: ID! @id
-    username: String
-    email: String
-    skin_type: [String]
-    skin_concerns: [String]
-    favorites: [Product!]! @relationship(type: "LIKES", direction: OUT, properties: "LikesProps")
-  }
-
-  type Paper {
-    paper_id: ID! @id
-    title: String
-    doi: String
-    arxiv_id: String
-    authors: [String]
-    published_at: Date
-    journal: String
-  }
-
-  interface IsInProps @relationshipProperties {
-    position: Int
-  }
-
-  interface LikesProps @relationshipProperties {
-    notes: String
-    created_at: DateTime
-  }
-
-  interface ReferencedInProps @relationshipProperties {
-    relation_type: String
-    notes: String
-  }
-`;
-
-const neoSchema = new Neo4jGraphQL({ typeDefs, driver });
-const schema = await neoSchema.getSchema();
-const server = new ApolloServer({ schema });
-await server.start();
-
-const app = express();
-app.use(cors({ origin: true }));
-app.use(express.json());
-app.use(
-  "/graphql",
-  expressMiddleware(server, {
-    context: async ({ req }) => {
-      const token = req.headers.authorization?.split("Bearer ")[1];
-      const user = token ? await admin.auth().verifyIdToken(token) : null;
-      return { driver, req, user };
-    },
-  })
-);
-
-export const api = onRequest(app);
-```
-
-```json
-// functions/package.json (key deps)
-{
-  "dependencies": {
-    "neo4j-driver": "^5.0.0",
-    "@neo4j/graphql": "^5.0.0",
-    "@apollo/server": "^4.0.0",
-    "firebase-admin": "^12.0.0",
-    "firebase-functions": "^5.0.0",
-    "express": "^4.18.0",
-    "cors": "^2.8.5"
-  }
-}
-```
-
-### Step 4 — Client: replace Supabase with Apollo
-
-```ts
-// src/lib/apollo.ts
-import { ApolloClient, InMemoryCache, createHttpLink } from "@apollo/client";
-import { setContext } from "@apollo/client/link/context";
-import { getAuth } from "firebase/auth";
-
-const httpLink = createHttpLink({
-  uri: import.meta.env.VITE_GRAPHQL_URL, // Cloud Function URL
-});
-
-const authLink = setContext(async (_, { headers }) => {
-  const token = await getAuth().currentUser?.getIdToken();
-  return {
-    headers: { ...headers, authorization: token ? `Bearer ${token}` : "" },
-  };
-});
-
-export const apolloClient = new ApolloClient({
-  link: authLink.concat(httpLink),
-  cache: new InMemoryCache(),
-});
-```
-
-```tsx
-// src/main.tsx — wrap app
-import { ApolloProvider } from "@apollo/client";
-import { apolloClient } from "./lib/apollo";
-
-root.render(
-  <ApolloProvider client={apolloClient}>
-    <App />
-  </ApolloProvider>
-);
-```
-
-### Step 5 — Replace Supabase Auth with Firebase Auth
-
-```ts
-// src/contexts/AuthContext.tsx
-import { initializeApp } from "firebase/app";
-import {
-  getAuth,
-  GoogleAuthProvider,
-  GithubAuthProvider,
-  signInWithPopup,
-  onAuthStateChanged,
-} from "firebase/auth";
-import { createContext, useContext, useEffect, useState } from "react";
-
-const app = initializeApp({
-  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
-});
-
-const auth = getAuth(app);
-
-const AuthContext = createContext(null);
-
-export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  useEffect(() => onAuthStateChanged(auth, setUser), []);
-
-  return (
-    <AuthContext.Provider value={{
-      user,
-      signInWithGoogle: () => signInWithPopup(auth, new GoogleAuthProvider()),
-      signInWithGithub: () => signInWithPopup(auth, new GithubAuthProvider()),
-      signOut: () => auth.signOut(),
-    }}>
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export const useAuth = () => useContext(AuthContext);
-```
-
-### Step 6 — Replace hook queries
-
-Example: `useIngredientProducts` before and after.
-
-```ts
-// BEFORE (Supabase)
-const { data } = await supabase
-  .from("sss_product_ingredients_join")
-  .select("position, sss_products(product_id, product_name, image_url)")
-  .eq("ingredient_id", ingredientId);
-
-// AFTER (Apollo)
-const GET_INGREDIENT_PRODUCTS = gql`
-  query GetIngredientProducts($ingredientId: ID!) {
-    ingredients(where: { ingredient_id: $ingredientId }) {
-      productsConnection {
-        edges {
-          properties { position }
-          node { product_id product_name image_url }
-        }
-      }
-    }
-  }
-`;
-const { data } = useQuery(GET_INGREDIENT_PRODUCTS, { variables: { ingredientId } });
-```
-
----
-
-## File changelist
+### File changelist (Phase 3)
 
 ```
 New
-├── functions/                        ← Firebase Cloud Functions (new service)
-│   ├── src/index.ts                  ← Neo4j GraphQL API
+├── functions/
+│   ├── src/index.ts          ← Neo4j GraphQL API (Firebase Cloud Function)
 │   └── package.json
-├── scripts/migrate-to-neo4j.ts       ← one-time data migration
-├── src/lib/apollo.ts                 ← replaces supabase/client.ts
-└── docs/neo4j-migration-plan.md      ← this file
+├── scripts/migrate-to-neo4j.ts
 
 Rewritten
-├── src/contexts/AuthContext.tsx      ← Firebase Auth replaces Supabase Auth
-├── src/hooks/useIngredients.ts
+├── src/lib/apollo.ts                 ← replaces supabase/client.ts
+├── src/hooks/useIngredients.ts       ← gql queries replace supabase queries
 ├── src/hooks/useIngredientProducts.ts
 └── src/main.tsx                      ← ApolloProvider wrapper
 
 Deleted
 ├── src/integrations/supabase/client.ts
 ├── src/integrations/supabase/publicClient.ts
-└── src/integrations/supabase/types.ts
+└── src/integrations/supabase/types.ts  ← replaced by GraphQL codegen types
 
 Modified
-├── package.json                      ← add @apollo/client, firebase; remove @supabase/supabase-js
-├── .env                              ← add NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, Firebase config
-└── firebase.json                     ← add functions to hosting config
-```
-
----
-
-## Environment variables
-
-```bash
-# .env (client)
-VITE_GRAPHQL_URL=https://us-central1-YOUR_PROJECT.cloudfunctions.net/api/graphql
-VITE_FIREBASE_API_KEY=
-VITE_FIREBASE_AUTH_DOMAIN=
-VITE_FIREBASE_PROJECT_ID=
-
-# functions/.env (server)
-NEO4J_URI=neo4j+s://XXXX.databases.neo4j.io
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=
+├── package.json       ← add @apollo/client; remove @supabase/supabase-js
+└── firebase.json      ← add functions
 ```
 
 ---
@@ -501,20 +355,8 @@ NEO4J_PASSWORD=
 
 | Decision | Rationale |
 |---|---|
-| Firebase Cloud Functions as API layer | Already on Firebase Hosting; avoids new infra |
-| `@neo4j/graphql` over hand-written resolvers | Auto-generates CRUD; significant less boilerplate |
-| Firebase Auth over Auth0/Clerk | Same project as hosting/functions; Google + GitHub already supported |
-| Drop `product_count`, `avg_position`, `ingredient_count` stored fields | Computed via traversal; eliminates sync bugs |
-| Keep table UI unchanged | Graph → flat row conversion is free in Cypher; no UI cost |
-
----
-
-## When to reconsider
-
-The migration pays off when any of these features are added:
-- Ingredient similarity ("users who liked this also used...")
-- Skin concern → ingredient recommendation paths
-- Cross-product ingredient overlap analysis
-- Variable-length traversal (ingredient → paper → cited-by)
-
-If the product stays a flat table with one-hop product lookups, Supabase with indexed FKs matches or exceeds Neo4j read performance for those patterns.
+| Build recommendations on Supabase first | Validate query patterns before paying for graph infra |
+| Promote `skin_concerns` to `(:Concern)` nodes | Enables HAS_CONCERN traversal; array intersection in Postgres, pointer follow in graph |
+| Normalize skin enums now (Phase 1) | Graph clustering is garbage-in/garbage-out; clean data is the prerequisite |
+| Defer auth migration decision | Supabase Auth works; not worth the rewrite risk until graph migration is confirmed |
+| Chunk IS_IN migration at 10k rows | 1.2M rows in one transaction will timeout and OOM |

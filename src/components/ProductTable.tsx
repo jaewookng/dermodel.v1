@@ -5,14 +5,16 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Product } from '@/hooks/useIngredients';
 import { ProductIngredients } from './ProductIngredients';
 import { ProductFavoriteButton } from './ProductFavoriteButton';
+import type { GraphTarget } from '@/hooks/useGraphData';
 
 interface ProductTableProps {
   products: Product[];
   onIngredientClick?: (ingredientId: string, ingredientName: string) => void;
   expandedId?: string | null;
+  onOpenGraph?: (target: GraphTarget) => void;
 }
 
-export const ProductTable = ({ products, onIngredientClick, expandedId }: ProductTableProps) => {
+export const ProductTable = ({ products, onIngredientClick, expandedId, onOpenGraph }: ProductTableProps) => {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
   // Update expanded rows when expandedId changes from parent
@@ -77,7 +79,12 @@ export const ProductTable = ({ products, onIngredientClick, expandedId }: Produc
                   <TableRow className="pointer-events-auto">
                     <TableCell colSpan={4} className="p-3 bg-gray-50 pointer-events-auto">
                       <div className="space-y-2 text-xs pointer-events-auto">
-                        <ProductIngredients productId={product.product_id} onIngredientClick={onIngredientClick} />
+                        <ProductIngredients
+                          productId={product.product_id}
+                          productName={product.product_name}
+                          onIngredientClick={onIngredientClick}
+                          onOpenGraph={onOpenGraph}
+                        />
                       </div>
                     </TableCell>
                   </TableRow>

@@ -8,15 +8,18 @@ import { SimplePagination } from './SimplePagination';
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import type { GraphTarget } from '@/hooks/useGraphData';
 
 type TabView = 'ingredients' | 'products';
 
 interface OptimizedIngredientDatabaseProps {
   initialTab?: TabView;
+  onOpenGraph?: (target: GraphTarget) => void;
 }
 
 const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
   initialTab = 'ingredients',
+  onOpenGraph,
 }: OptimizedIngredientDatabaseProps) {
   const [activeTab, setActiveTab] = useState<TabView>(initialTab);
   const [productSearch, setProductSearch] = useState('');
@@ -191,6 +194,7 @@ const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
                     ingredients={ingredients}
                     onProductClick={handleProductClick}
                     expandedId={expandedIngredientId}
+                    onOpenGraph={onOpenGraph}
                   />
                 </div>
 
@@ -291,6 +295,7 @@ const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
                     products={paginatedProducts}
                     onIngredientClick={handleIngredientClick}
                     expandedId={expandedProductId}
+                    onOpenGraph={onOpenGraph}
                   />
                 </div>
 

@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { FaceModel } from '@/components/FaceModel';
 import { OptimizedIngredientDatabase } from '@/components/OptimizedIngredientDatabase';
+import { GraphPanel } from '@/components/GraphPanel';
+import type { GraphTarget } from '@/hooks/useGraphData';
 import { useAuth } from '@/contexts/AuthContext';
 import { LoginDialog } from '@/components/Auth/LoginDialog';
 import {
@@ -24,6 +26,7 @@ const Index = () => {
   const location = useLocation();
   const [loginOpen, setLoginOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [graphTarget, setGraphTarget] = useState<GraphTarget | null>(null);
 
   const initialTab =
     ((location.state as { tab?: 'ingredients' | 'products' } | null)?.tab) || 'ingredients';
@@ -116,14 +119,35 @@ const Index = () => {
       {/* Login Dialog */}
       <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
 
-      {/* 3D Face Model - Full screen canvas that extends behind table */}
-      <div className="fixed inset-0">
+      {/* 3D Face Model - shifts left when graph is open */}
+      <div
+        className="fixed inset-0"
+        style={{
+          transform: graphTarget ? 'translateX(-22vw)' : 'translateX(0)',
+          transition: 'transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
+        }}
+      >
         <FaceModel />
       </div>
+
+      {/* Graph Panel - slides in between model and ingredient list */}
+      <div
+        className="fixed top-4 bottom-4 z-10"
+        style={{
+          right: 'calc(24rem + 1rem)',
+          width: 'min(42vw, 560px)',
+          transform: graphTarget ? 'translateX(0)' : 'translateX(calc(100% + 25rem))',
+          transition: 'transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
+          pointerEvents: graphTarget ? 'auto' : 'none',
+        }}
+      >
+        <GraphPanel target={graphTarget} onClose={() => setGraphTarget(null)} />
+      </div>
+
       {/* Compact Ingredient Database Overlay - Fixed on the right */}
       <div className="fixed top-0 right-0 w-96 h-screen p-4 pointer-events-none z-10">
         <div className="bg-white/95 backdrop-blur-sm rounded-lg shadow-2xl h-full overflow-hidden pointer-events-auto">
-          <OptimizedIngredientDatabase initialTab={initialTab} />
+          <OptimizedIngredientDatabase initialTab={initialTab} onOpenGraph={setGraphTarget} />
         </div>
       </div>
     </div>

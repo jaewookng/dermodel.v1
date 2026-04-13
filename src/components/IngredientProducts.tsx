@@ -1,11 +1,15 @@
 import { useIngredientProducts } from '@/hooks/useIngredientProducts';
+import type { GraphTarget } from '@/hooks/useGraphData';
+import { Network } from 'lucide-react';
 
 interface IngredientProductsProps {
   ingredientId: string;
+  ingredientName: string;
   onProductClick?: (productId: string, productName: string) => void;
+  onOpenGraph?: (target: GraphTarget) => void;
 }
 
-export const IngredientProducts = ({ ingredientId, onProductClick }: IngredientProductsProps) => {
+export const IngredientProducts = ({ ingredientId, ingredientName, onProductClick, onOpenGraph }: IngredientProductsProps) => {
   const { data: products, isLoading } = useIngredientProducts(ingredientId);
 
   if (isLoading) {
@@ -23,7 +27,18 @@ export const IngredientProducts = ({ ingredientId, onProductClick }: IngredientP
 
   return (
     <div className="pt-2">
-      <span className="font-medium text-gray-700">Products ({products.length}):</span>
+      <div className="flex items-center justify-between mb-1">
+        <span className="font-medium text-gray-700">Products ({products.length}):</span>
+        {onOpenGraph && (
+          <button
+            onClick={() => onOpenGraph({ type: 'ingredient', id: ingredientId, name: ingredientName })}
+            className="flex items-center gap-1 text-[10px] text-violet-600 hover:text-violet-800 transition-colors font-medium"
+          >
+            <Network className="h-3 w-3" />
+            Graph view
+          </button>
+        )}
+      </div>
       <div className="mt-1 space-y-1">
         {products.map((product) => (
           <div
