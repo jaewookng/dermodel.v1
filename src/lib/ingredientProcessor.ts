@@ -17,4 +17,6 @@ export interface ProcessedIngredient {
   // From sss_ingredients table
   productCount?: number;
   avgPosition?: number | null;
+  // Popularity: times this ingredient is cited in users' liked products (global)
+  likeCount?: number;
 }

@@ -227,7 +227,26 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      sss_ingredients_ranked: {
+        Row: {
+          ingredient_id: string | null
+          ingredient_name: string | null
+          product_count: number | null
+          avg_position: number | null
+          like_count: number | null
+        }
+        Relationships: []
+      }
+      sss_products_ranked: {
+        Row: {
+          product_id: string | null
+          product_name: string | null
+          ingredient_count: number | null
+          image_url: string | null
+          like_count: number | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       [_ in never]: never

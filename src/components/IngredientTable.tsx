@@ -1,7 +1,7 @@
 import { useState, Fragment, useEffect } from 'react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Heart } from 'lucide-react';
 import { ProcessedIngredient } from '@/lib/ingredientProcessor';
 import { IngredientProducts } from './IngredientProducts';
 import type { GraphTarget } from '@/hooks/useGraphData';
@@ -66,9 +66,20 @@ export const IngredientTable = ({ ingredients, onProductClick, expandedId, onOpe
                   </TableCell>
                   <TableCell className="p-2 font-medium text-xs pointer-events-auto">{ingredient.name}</TableCell>
                   <TableCell className="p-2 pointer-events-auto">
-                    <span className="text-xs text-gray-600">
-                      {ingredient.productCount || 0} products
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-600">
+                        {ingredient.productCount || 0} products
+                      </span>
+                      {(ingredient.likeCount || 0) > 0 && (
+                        <span
+                          className="flex items-center gap-0.5 text-xs text-rose-500"
+                          title={`Cited in ${ingredient.likeCount} liked product${ingredient.likeCount === 1 ? '' : 's'}`}
+                        >
+                          <Heart className="h-3 w-3 fill-current" />
+                          {ingredient.likeCount}
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
                 {isExpanded && (

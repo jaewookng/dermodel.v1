@@ -15,7 +15,7 @@ export interface PaginationState {
 const DEFAULT_FILTERS: FilterState = {
   search: '',
   hasData: 'all',
-  sortBy: 'name'
+  sortBy: 'popularity'
 };
 
 const DEFAULT_PAGINATION: PaginationState = {

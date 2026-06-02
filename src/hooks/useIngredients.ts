@@ -20,16 +20,21 @@ export interface Product {
   product_id: string;
   product_name: string;
   ingredient_count: number | null;
+  // Popularity: total times this product was liked across all users (global)
+  like_count?: number;
 }
 
 export const useIngredients = (filters: FilterParams = {}) => {
-  const { page = 1, limit = 50, search, hasData, sortBy = 'name' } = filters;
+  const { page = 1, limit = 50, search, hasData, sortBy = 'popularity' } = filters;
 
   return useQuery({
     queryKey: ['ingredients', { page, limit, search, hasData, sortBy }],
     queryFn: async (): Promise<IngredientsResponse> => {
+      // Read from the ranked view so popularity (like_count = times the
+      // ingredient is cited in users' liked products, globally) is sortable
+      // server-side alongside pagination and search.
       let query = supabasePublic
-        .from('sss_ingredients')
+        .from('sss_ingredients_ranked')
         .select('*', { count: 'exact' })
         .not('ingredient_name', 'is', null);
 
@@ -39,12 +44,18 @@ export const useIngredients = (filters: FilterParams = {}) => {
       if (hasData === 'with-products')
         query = query.gt('product_count', 0);
 
-      if (sortBy === 'name-desc')
+      if (sortBy === 'name')
+        query = query.order('ingredient_name', { ascending: true });
+      else if (sortBy === 'name-desc')
         query = query.order('ingredient_name', { ascending: false });
       else if (sortBy === 'product-count')
         query = query.order('product_count', { ascending: false });
       else
-        query = query.order('ingredient_name', { ascending: true });
+        // popularity (default): most-liked first, then by product count as a
+        // tiebreaker so ingredients with no likes still order sensibly.
+        query = query
+          .order('like_count', { ascending: false })
+          .order('product_count', { ascending: false });
 
       const from = (page - 1) * limit;
       const { data, count, error } = await query.range(from, from + limit - 1);
@@ -52,7 +63,7 @@ export const useIngredients = (filters: FilterParams = {}) => {
       if (error) throw error;
 
       const processed: ProcessedIngredient[] = (data || []).map(row => ({
-        id: row.ingredient_id,
+        id: row.ingredient_id!,
         name: row.ingredient_name!,
         description: '',
         benefits: [],
@@ -62,6 +73,7 @@ export const useIngredients = (filters: FilterParams = {}) => {
         functions: [],
         productCount: row.product_count || 0,
         avgPosition: row.avg_position || null,
+        likeCount: row.like_count || 0,
       }));
 
       return {
@@ -115,9 +127,12 @@ export const useProducts = () => {
       while (true) {
         console.log(`📦 Fetching products batch: range(${from}, ${from + batchSize - 1})`);
 
+        // Read from the ranked view so products default to popularity order
+        // (like_count = total likes across all users), then name as tiebreaker.
         const { data, error } = await supabasePublic
-          .from('sss_products')
+          .from('sss_products_ranked')
           .select('*')
+          .order('like_count', { ascending: false })
           .order('product_name', { ascending: true })
           .range(from, from + batchSize - 1);
 
@@ -130,7 +145,15 @@ export const useProducts = () => {
         console.log(`📦 Batch returned ${batchLength} products`);
 
         if (data && data.length > 0) {
-          allProducts = [...allProducts, ...data];
+          const mapped: Product[] = data
+            .filter(row => row.product_id && row.product_name)
+            .map(row => ({
+              product_id: row.product_id!,
+              product_name: row.product_name!,
+              ingredient_count: row.ingredient_count,
+              like_count: row.like_count || 0,
+            }));
+          allProducts = [...allProducts, ...mapped];
           from += batchSize;
 
           // Stop if we got less than a full batch (no more data)

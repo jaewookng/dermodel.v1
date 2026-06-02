@@ -32,7 +32,7 @@ export const IngredientFilters = ({
     onFiltersChange({
       search: '',
       hasData: 'all',
-      sortBy: 'name'
+      sortBy: 'popularity'
     });
   };
 
@@ -84,6 +84,7 @@ export const IngredientFilters = ({
             <SelectValue placeholder="Sort by" />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="popularity">Popularity</SelectItem>
             <SelectItem value="name">Name (A-Z)</SelectItem>
             <SelectItem value="name-desc">Name (Z-A)</SelectItem>
             <SelectItem value="product-count">Product Count</SelectItem>

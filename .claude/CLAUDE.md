@@ -18,6 +18,78 @@ This document outlines the steps to remove "Lovable" branding from your project 
 
 ---
 
+## ⭐ FEATURE: Default Ingredient Sort by Popularity (2026-06-01)
+
+**Status**: ✅ **CODE COMPLETE — requires DB migration to be applied**
+
+### Overview
+The ingredient table now defaults to sorting by **popularity**, where popularity =
+the number of times an ingredient is cited in users' liked products
+(`product_favorites`), aggregated **globally across all users**.
+
+### What Was Changed
+- **`supabase/migrations/20260601_ingredient_popularity_ranking.sql`** (NEW):
+  Creates view `sss_ingredients_ranked` = `sss_ingredients` + `like_count`
+  (`COUNT(*)` of `product_favorites` rows joined through
+  `sss_product_ingredients_join`). The view runs with default
+  `security_invoker = false`, so it bypasses the per-user RLS on
+  `product_favorites` and counts every user's likes. Only the aggregate count is
+  exposed (no `user_id` / per-user data). `GRANT SELECT` to anon + authenticated
+  so logged-out visitors also get global popularity.
+- **`useIngredients.ts`**: queries `sss_ingredients_ranked` instead of
+  `sss_ingredients`; default `sortBy` is now `'popularity'` (orders by
+  `like_count desc`, then `product_count desc` as tiebreaker); maps `like_count`
+  → `ProcessedIngredient.likeCount`.
+- **`ingredientProcessor.ts`**: added `likeCount?: number`.
+- **`types.ts`**: added `sss_ingredients_ranked` under `Views`.
+- **`useIngredientFilters.ts`** + **`IngredientFilters.tsx`**: default `sortBy`
+  changed `'name'` → `'popularity'`; added "Popularity" sort option.
+- **`IngredientTable.tsx`**: shows a rose heart + count next to the product count
+  when `likeCount > 0`.
+
+### ⚠️ Action Required
+Apply the migration before this works in production (otherwise the query 404s on
+the missing view):
+```bash
+supabase db push
+# or paste 20260601_ingredient_popularity_ranking.sql into the SQL editor
+```
+
+### Companion Feature
+Product view popularity — see below.
+
+---
+
+## ⭐ FEATURE: Default Product Sort by Popularity (2026-06-02)
+
+**Status**: ✅ **CODE COMPLETE — requires DB migration to be applied**
+
+### Overview
+The product list now defaults to sorting by **popularity** = total number of
+times a product was liked across all users (`product_favorites`).
+
+### What Was Changed
+- **`supabase/migrations/20260602_product_popularity_ranking.sql`** (NEW):
+  Creates view `sss_products_ranked` = `sss_products` + `like_count`
+  (`COUNT(*)` of `product_favorites` grouped by `product_id`). Same RLS-bypass /
+  aggregate-only / anon+authenticated `GRANT SELECT` design as
+  `sss_ingredients_ranked`.
+- **`useIngredients.ts`** (`useProducts`): fetches from `sss_products_ranked`,
+  orders by `like_count desc` then `product_name asc`; maps rows into `Product`
+  (now with `like_count?`). Product list paginates client-side as before, so
+  popularity order is preserved across pages.
+- **`types.ts`**: added `sss_products_ranked` under `Views`.
+- **`ProductTable.tsx`**: shows a rose heart + count next to the ingredient
+  count when `like_count > 0`.
+
+### ⚠️ Action Required
+```bash
+supabase db push
+# or paste 20260602_product_popularity_ranking.sql into the SQL editor
+```
+
+---
+
 ## 🔄 MIGRATION: Switch to sss_ Tables Only (2025-11-25)
 
 **Status**: ✅ **COMPLETED**
