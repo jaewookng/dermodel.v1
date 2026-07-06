@@ -118,15 +118,11 @@ export const useProducts = () => {
   return useQuery({
     queryKey: ['products'],
     queryFn: async (): Promise<Product[]> => {
-      console.log('🔍 Fetching all products from sss_products');
-
       let allProducts: Product[] = [];
       let from = 0;
       const batchSize = 1000; // Supabase default limit
 
       while (true) {
-        console.log(`📦 Fetching products batch: range(${from}, ${from + batchSize - 1})`);
-
         // Read from the ranked view so products default to popularity order
         // (like_count = total likes across all users), then name as tiebreaker.
         const { data, error } = await supabasePublic
@@ -140,9 +136,6 @@ export const useProducts = () => {
           console.error('❌ Supabase error fetching products:', error);
           throw error;
         }
-
-        const batchLength = data?.length || 0;
-        console.log(`📦 Batch returned ${batchLength} products`);
 
         if (data && data.length > 0) {
           const mapped: Product[] = data
@@ -165,7 +158,6 @@ export const useProducts = () => {
         }
       }
 
-      console.log('✅ Fetched all products:', allProducts.length);
       return allProducts;
     },
     enabled: true,

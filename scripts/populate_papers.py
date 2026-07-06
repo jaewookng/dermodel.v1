@@ -14,6 +14,7 @@ Features:
 """
 
 import os
+import sys
 import json
 import time
 import uuid
@@ -34,7 +35,12 @@ except ImportError:
 
 SUPABASE_URL = "https://dolkstgbyfozbetxyrby.supabase.co"
 # Use your service role key (has write permissions) - keep this secret!
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRvbGtzdGdieWZvemJldHh5cmJ5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MTc5NjA4OCwiZXhwIjoyMDU3MzcyMDg4fQ.WED_p7KRQh80eEsryd4CjpoZW1BeHhdIigeWb5ZWeoI")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+if not SUPABASE_KEY:
+    sys.exit(
+        "SUPABASE_SERVICE_KEY is not set. Export the service-role key first:\n"
+        '  export SUPABASE_SERVICE_KEY="..."  (Supabase Dashboard > Settings > API)'
+    )
 
 # Semantic Scholar settings
 SEMANTIC_SCHOLAR_API = "https://api.semanticscholar.org/graph/v1/paper/search"
@@ -43,7 +49,7 @@ REQUEST_DELAY = 3  # seconds between requests (with API key: 100 req/5min = 1 re
 
 # Optional: Add your Semantic Scholar API key for higher rate limits
 # Get one at: https://www.semanticscholar.org/product/api
-SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_KEY", "vNYFA7adXT91a3UPDnvYj1FS6umrN00C2811KmWn")
+SEMANTIC_SCHOLAR_API_KEY = os.environ.get("SEMANTIC_SCHOLAR_KEY", "")
 
 # Script settings
 CHECKPOINT_FILE = "checkpoint.json"

@@ -23,10 +23,12 @@ import requests
 from process_ingredients import process, CSV_PATH
 
 SUPABASE_URL = "https://dolkstgbyfozbetxyrby.supabase.co"
-SUPABASE_KEY = os.environ.get(
-    "SUPABASE_SERVICE_KEY",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRvbGtzdGdieWZvemJldHh5cmJ5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MTc5NjA4OCwiZXhwIjoyMDU3MzcyMDg4fQ.WED_p7KRQh80eEsryd4CjpoZW1BeHhdIigeWb5ZWeoI",
-)
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+if not SUPABASE_KEY:
+    sys.exit(
+        "SUPABASE_SERVICE_KEY is not set. Export the service-role key first:\n"
+        '  export SUPABASE_SERVICE_KEY="..."  (Supabase Dashboard > Settings > API)'
+    )
 REST = f"{SUPABASE_URL}/rest/v1"
 HEADERS = {
     "apikey": SUPABASE_KEY,

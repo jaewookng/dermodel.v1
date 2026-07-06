@@ -18,6 +18,54 @@ This document outlines the steps to remove "Lovable" branding from your project 
 
 ---
 
+## 🔒 SECURITY + QOL PASS (2026-07-06)
+
+**Status**: ✅ **CODE COMPLETE — ⚠️ TWO MANUAL ACTIONS REQUIRED (see below)**
+
+### 🚨 CRITICAL: Leaked keys — ROTATE IMMEDIATELY
+The Supabase **service-role key** was hardcoded (as an env-var fallback) in
+`load_to_supabase.py` and `scripts/populate_papers.py`, both committed to the
+**public** GitHub repo (`jaewookng/dermodel.v1`). A Semantic Scholar API key was
+also hardcoded in `populate_papers.py`. The hardcoded values are now removed
+(scripts hard-fail without `SUPABASE_SERVICE_KEY`), **but the keys remain in git
+history and must be treated as compromised.**
+
+**Manual action 1 — rotate keys** (Supabase Dashboard → Settings → API):
+rotate the JWT secret (or migrate to `sb_secret_`/`sb_publishable_` keys). This
+also invalidates the anon key → update it in
+`src/integrations/supabase/config.ts` (or set `VITE_SUPABASE_ANON_KEY` in
+`.env`) and redeploy. Also rotate the Semantic Scholar key.
+
+**Manual action 2 — apply pending migrations** (`supabase db push`, needs DB
+password; the CLI was returning 504s from this machine):
+- `20260603_popularity_indexed_counters.sql` (perf, from previous session)
+- `20260706_harden_function_search_path.sql` (NEW — pins `search_path` on
+  `handle_new_user()` / `update_profiles_updated_at()`; both were flagged-style
+  SECURITY DEFINER / mutable-search-path functions)
+
+### Other changes in this pass
+- **Secrets hygiene**: scripts now require `SUPABASE_SERVICE_KEY` env var (no
+  fallback); `.env*` and `__pycache__/` added to `.gitignore`; `.env.example`
+  added.
+- **Supabase client config**: URL + anon key extracted to
+  `src/integrations/supabase/config.ts`, read from `VITE_SUPABASE_URL` /
+  `VITE_SUPABASE_ANON_KEY` with production fallbacks; `client.ts` and
+  `publicClient.ts` both import it.
+- **Console log cleanup**: removed auth/session logging (`AuthContext.tsx`,
+  `Index.tsx`) and product-fetch logging (`useIngredients.ts`); `FaceModel.tsx`
+  debug logs now behind a dev-only `debug()` helper (console.warn kept).
+- **Dependencies**: `npm audit fix` applied — 18 vulns → 1 (remaining: esbuild
+  dev-server advisory, dev-only, fix requires breaking Vite 8 upgrade — deferred).
+- **Hosting headers**: `firebase.json` now sets `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`,
+  and HSTS on all responses. (No CSP yet — needs testing against Spline/Supabase
+  origins before adding.)
+
+### Verified
+✅ `npx tsc --noEmit` clean ✅ `npm run build` succeeds ✅ Python scripts compile
+
+---
+
 ## ⭐ FEATURE: Default Ingredient Sort by Popularity (2026-06-01)
 
 **Status**: ✅ **CODE COMPLETE — requires DB migration to be applied**
@@ -87,6 +135,40 @@ times a product was liked across all users (`product_favorites`).
 supabase db push
 # or paste 20260602_product_popularity_ranking.sql into the SQL editor
 ```
+
+---
+
+## ⚡ PERF: Indexed Popularity Counters (2026-06-03)
+
+**Status**: ✅ **CODE COMPLETE — requires DB migration to be applied**
+
+### Problem
+The original `sss_*_ranked` views computed `like_count` with `COUNT(*)` +
+`GROUP BY` + `LEFT JOIN` on **every** read, and `ORDER BY like_count` could not
+use an index (computed per-query). Loading the full product list re-aggregated
+all of `product_favorites` and full-sorted the whole table each request → noticeably slow.
+
+### Fix
+**`supabase/migrations/20260603_popularity_indexed_counters.sql`** (NEW):
+- Adds real `like_count BIGINT` columns to `sss_products` and `sss_ingredients`.
+- Indexes matching the app's ORDER BY: `sss_products (like_count DESC,
+  product_name ASC)` and `sss_ingredients (like_count DESC, product_count DESC)`;
+  plus `product_favorites (product_id)`.
+- Backfills counts from current `product_favorites`.
+- `sss_apply_favorite_counts()` trigger (AFTER INSERT/DELETE on
+  `product_favorites`, `SECURITY DEFINER`) increments/decrements the affected
+  product and its ingredients incrementally.
+- Redefines `sss_ingredients_ranked` / `sss_products_ranked` as thin
+  pass-throughs (same columns/order → **no frontend change**), so ordering is
+  now index-backed.
+
+### ⚠️ Action Required
+```bash
+supabase db push
+# or paste 20260603_popularity_indexed_counters.sql into the SQL editor
+```
+Supersedes the per-query aggregation in the 20260601/20260602 views via
+`CREATE OR REPLACE VIEW` (safe whether or not those were already applied).
 
 ---
 

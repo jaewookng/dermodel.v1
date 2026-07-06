@@ -6,6 +6,9 @@ import * as THREE from 'three';
 
 type FaceArea = 'forehead' | 'eyes' | 'cheeks' | 'nose' | 'mouth' | 'chin' | null;
 
+// Spline scene setup logs, only in dev builds
+const debug: typeof console.log = import.meta.env.DEV ? console.log : () => {};
+
 // Map Spline object names to face areas
 const splineToFaceAreaMap: Record<string, FaceArea> = {
   'face_eyes': 'eyes',
@@ -75,10 +78,10 @@ export const FaceModel = () => {
 
     const app = splineApp as any;
 
-    console.log('🎬 Spline app loaded');
-    console.log('📦 Available keys:', Object.keys(app));
-    console.log('🔍 Has renderer:', !!app.renderer);
-    console.log('🔍 Has scene:', !!app.scene);
+    debug('🎬 Spline app loaded');
+    debug('📦 Available keys:', Object.keys(app));
+    debug('🔍 Has renderer:', !!app.renderer);
+    debug('🔍 Has scene:', !!app.scene);
 
     // Wait for renderer and scene to be ready (with retry mechanism)
     const setupRaycaster = () => {
@@ -88,11 +91,11 @@ export const FaceModel = () => {
       const canvas = renderer?.domElement || app.canvas || document.querySelector('canvas');
 
       if (!canvas || !scene) {
-        console.log(`⏳ Waiting... Canvas: ${!!canvas}, Scene: ${!!scene}, Renderer: ${!!renderer}`);
+        debug(`⏳ Waiting... Canvas: ${!!canvas}, Scene: ${!!scene}, Renderer: ${!!renderer}`);
         return false;
       }
 
-      console.log('✓ Renderer and scene ready, setting up raycaster');
+      debug('✓ Renderer and scene ready, setting up raycaster');
 
       // ─────────────────────────────────────────────────────────────────────
       // Scene References (using already extracted variables)
@@ -121,7 +124,7 @@ export const FaceModel = () => {
             return;
           }
 
-          console.log(`✓ Found Spline object: ${objectName}`);
+          debug(`✓ Found Spline object: ${objectName}`);
           const faceArea = splineToFaceAreaMap[objectName];
 
           // Extract underlying Three.js object
@@ -147,7 +150,7 @@ export const FaceModel = () => {
           }
         });
 
-        console.log(`✓ Mapped ${objectToFaceAreaMap.size} objects to face areas`);
+        debug(`✓ Mapped ${objectToFaceAreaMap.size} objects to face areas`);
       };
 
       // Populate immediately and with delays for late-loading objects
@@ -171,7 +174,7 @@ export const FaceModel = () => {
               newZ
             );
 
-            console.log(`✓ Camera moved closer: z from ${currentZ.toFixed(2)} to ${newZ.toFixed(2)}`);
+            debug(`✓ Camera moved closer: z from ${currentZ.toFixed(2)} to ${newZ.toFixed(2)}`);
           }
         } catch (error) {
           console.warn('Could not adjust camera position:', error);
@@ -305,7 +308,7 @@ export const FaceModel = () => {
             const faceArea = performRaycast();
             if (faceArea) {
               setActiveArea(prev => prev === faceArea ? null : faceArea);
-              console.log(`✓ Clicked on face area: ${faceArea}`);
+              debug(`✓ Clicked on face area: ${faceArea}`);
             }
           } catch (error) {
             console.warn('Error in click raycasting:', error);
@@ -338,7 +341,7 @@ export const FaceModel = () => {
         canvas.removeEventListener('mouseleave', handleMouseLeave);
       };
 
-      console.log('✓ Raycaster set up for click and hover detection');
+      debug('✓ Raycaster set up for click and hover detection');
 
       return true; // Setup successful
     };
@@ -346,14 +349,14 @@ export const FaceModel = () => {
     // Try to setup raycaster with extended retry mechanism
     const retrySetup = (attempt: number = 1, maxAttempts: number = 10) => {
       if (setupRaycaster()) {
-        console.log(`✓ Raycaster setup successful on attempt ${attempt}`);
+        debug(`✓ Raycaster setup successful on attempt ${attempt}`);
         return;
       }
 
       if (attempt >= maxAttempts) {
         console.warn('⚠️  Raycaster setup skipped - scene not ready');
-        console.log('💡 Face zone interactions may not work without raycaster');
-        console.log('🔍 App structure:', {
+        debug('💡 Face zone interactions may not work without raycaster');
+        debug('🔍 App structure:', {
           appKeys: Object.keys(app).join(', '),
           hasRenderer: !!app.renderer,
           hasScene: !!app.scene,
@@ -484,7 +487,7 @@ export const FaceModel = () => {
                       key={index}
                       className="px-2 py-1 bg-violet-100 text-violet-700 text-xs rounded-full font-medium cursor-pointer hover:bg-violet-200 transition-colors"
                       onClick={() => {
-                        console.log('Search for ingredient:', ingredient);
+                        debug('Search for ingredient:', ingredient);
                       }}
                     >
                       {ingredient}
