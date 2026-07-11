@@ -1,6 +1,9 @@
+import { useState } from 'react';
 import { useIngredientProducts } from '@/hooks/useIngredientProducts';
 import type { GraphTarget } from '@/hooks/useGraphData';
-import { Network } from 'lucide-react';
+import { Network, ChevronDown } from 'lucide-react';
+
+const INITIAL_COUNT = 10;
 
 interface IngredientProductsProps {
   ingredientId: string;
@@ -10,7 +13,11 @@ interface IngredientProductsProps {
 }
 
 export const IngredientProducts = ({ ingredientId, ingredientName, onProductClick, onOpenGraph }: IngredientProductsProps) => {
-  const { data: products, isLoading } = useIngredientProducts(ingredientId);
+  const [showAll, setShowAll] = useState(false);
+  const { data, isLoading, isFetching } = useIngredientProducts(
+    ingredientId,
+    showAll ? null : INITIAL_COUNT
+  );
 
   if (isLoading) {
     return (
@@ -21,14 +28,19 @@ export const IngredientProducts = ({ ingredientId, ingredientName, onProductClic
     );
   }
 
-  if (!products || products.length === 0) {
+  const products = data?.products ?? [];
+  const totalCount = data?.totalCount ?? 0;
+
+  if (products.length === 0) {
     return null;
   }
+
+  const remaining = totalCount - products.length;
 
   return (
     <div className="pt-2">
       <div className="flex items-center justify-between mb-1">
-        <span className="font-medium text-gray-700">Products ({products.length}):</span>
+        <span className="font-medium text-gray-700">Products ({totalCount}):</span>
         {onOpenGraph && (
           <button
             onClick={() => onOpenGraph({ type: 'ingredient', id: ingredientId, name: ingredientName })}
@@ -61,6 +73,16 @@ export const IngredientProducts = ({ ingredientId, ingredientName, onProductClic
           </div>
         ))}
       </div>
+      {remaining > 0 && (
+        <button
+          onClick={() => setShowAll(true)}
+          disabled={isFetching}
+          className="mt-1.5 flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium transition-colors disabled:opacity-50"
+        >
+          <ChevronDown className="h-3 w-3" />
+          {isFetching ? 'Loading...' : `See all ${totalCount}`}
+        </button>
+      )}
     </div>
   );
 };

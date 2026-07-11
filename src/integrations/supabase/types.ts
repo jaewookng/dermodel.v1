@@ -101,6 +101,40 @@ export type Database = {
           }
         ]
       }
+      product_submissions: {
+        Row: {
+          id: string
+          product_url: string
+          product_name: string | null
+          user_id: string | null
+          status: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          product_url: string
+          product_name?: string | null
+          user_id?: string | null
+          status?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          product_url?: string
+          product_name?: string | null
+          user_id?: string | null
+          status?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_submissions_user_id_fkey"
+            columns: ["user_id"]
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       papers: {
         Row: {
           id: string

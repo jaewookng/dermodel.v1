@@ -18,6 +18,69 @@ This document outlines the steps to remove "Lovable" branding from your project 
 
 ---
 
+## ⭐ FEATURE: User Product Submissions (2026-07-09)
+
+**Status**: ✅ **CODE COMPLETE — requires DB migration + edge function deploy**
+
+### Overview
+Users can suggest products missing from the database. A "?" icon next to the
+**Product Database** heading shows a tooltip ("Don't see your product? Submit
+it here"); "here" opens a centered dialog with an optional product name and a
+required product link. On success the dialog shows the thank-you message and an
+email is sent to **admin@dermodel.app**.
+
+### Architecture
+- **`src/components/ProductSubmissionHelp.tsx`** (NEW): HelpCircle + Radix
+  tooltip + shadcn Dialog. Validates the URL client-side (http/https only).
+- **Submission flow**: client inserts directly into `product_submissions`
+  (source of truth — works even if the email function is down), then fires the
+  `notify-product-submission` edge function best-effort for the admin email.
+  Thank-you shows when the DB insert succeeds; insert failure shows an error.
+- **`supabase/migrations/20260709_product_submissions.sql`** (NEW): table with
+  `product_url` (≤2048 chars), `product_name` (≤200), nullable `user_id`,
+  `status` (default `'pending'`). RLS: INSERT-only for anon+authenticated
+  (`user_id` must be null or own uid); no SELECT — review via dashboard.
+- **`supabase/functions/notify-product-submission/index.ts`** (NEW): Deno edge
+  function, CORS-enabled, re-validates input, sends email via **Resend** API to
+  admin@dermodel.app.
+- **`types.ts`**: added `product_submissions`.
+- **`OptimizedIngredientDatabase.tsx`**: renders `<ProductSubmissionHelp />`
+  next to the Product Database h2.
+
+### Verified (dev server + browser)
+✅ Tooltip opens, "here" opens centered dialog ✅ URL validation error shows
+✅ Bad insert shows graceful error (table 404s until migration applied)
+✅ tsc + build clean
+
+### ⚠️ Action Required
+```bash
+supabase db push                                        # includes 20260709
+supabase functions deploy notify-product-submission
+supabase secrets set RESEND_API_KEY=re_...              # resend.com key
+```
+Also verify `dermodel.app` as a sending domain in Resend (function sends from
+`submissions@dermodel.app`). Until the migration is applied, submissions fail
+gracefully with an error message.
+
+---
+
+## ⭐ FEATURE: Capped Product List in Ingredient Cards (2026-07-06)
+
+**Status**: ✅ **COMPLETE — no DB change needed**
+
+Expanded ingredient rows previously fetched **every** product containing the
+ingredient (hundreds of rows for common ingredients). Now:
+- **`useIngredientProducts.ts`**: takes a `limit` (`number | null`); when set,
+  queries with `.range(0, limit - 1)`; `null` fetches everything. Always uses
+  `{ count: 'exact' }` and returns `{ products, totalCount }`;
+  `placeholderData: keepPreviousData` keeps the visible list stable while the
+  full list loads.
+- **`IngredientProducts.tsx`**: renders the first 10 with a
+  "See all N" button that switches to the unlimited fetch; header shows the
+  true total (`Products (totalCount)`).
+
+---
+
 ## 🔒 SECURITY + QOL PASS (2026-07-06)
 
 **Status**: ✅ **CODE COMPLETE — ⚠️ TWO MANUAL ACTIONS REQUIRED (see below)**

@@ -4,6 +4,7 @@ import { useIngredients, useIngredientsCount, useProducts, useProductsCount } fr
 import { useIngredientFilters } from '@/hooks/useIngredientFilters';
 import { IngredientTable } from './IngredientTable';
 import { ProductTable } from './ProductTable';
+import { ProductSubmissionHelp } from './ProductSubmissionHelp';
 import { SimplePagination } from './SimplePagination';
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { Input } from '@/components/ui/input';
@@ -236,6 +237,7 @@ const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
           <div className="flex items-center justify-between mb-3 pointer-events-auto">
             <div className="flex items-center gap-2">
               <h2 className="text-base font-semibold text-gray-800">Product Database</h2>
+              <ProductSubmissionHelp />
               {productsLoading && (
                 <div className="animate-pulse w-2 h-2 bg-violet-600 rounded-full" />
               )}
