@@ -1,7 +1,7 @@
 import { useState, Fragment, useEffect } from 'react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
-import { ChevronDown, ChevronRight, Heart } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Product } from '@/hooks/useIngredients';
 import { ProductIngredients } from './ProductIngredients';
 import { ProductFavoriteButton } from './ProductFavoriteButton';
@@ -67,23 +67,15 @@ export const ProductTable = ({ products, onIngredientClick, expandedId, onOpenGr
                   </TableCell>
                   <TableCell className="p-2 font-medium text-xs pointer-events-auto">{product.product_name}</TableCell>
                   <TableCell className="p-2 pointer-events-auto">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-600">
-                        {product.ingredient_count || 0} ingredients
-                      </span>
-                      {(product.like_count || 0) > 0 && (
-                        <span
-                          className="flex items-center gap-0.5 text-xs text-rose-500"
-                          title={`Liked by ${product.like_count} user${product.like_count === 1 ? '' : 's'}`}
-                        >
-                          <Heart className="h-3 w-3 fill-current" />
-                          {product.like_count}
-                        </span>
-                      )}
-                    </div>
+                    <span className="text-xs text-gray-600">
+                      {product.ingredient_count || 0} ingredients
+                    </span>
                   </TableCell>
                   <TableCell className="p-2 pointer-events-auto text-right">
-                    <ProductFavoriteButton productId={product.product_id} />
+                    <ProductFavoriteButton
+                      productId={product.product_id}
+                      likeCount={product.like_count || 0}
+                    />
                   </TableCell>
                 </TableRow>
                 {isExpanded && (

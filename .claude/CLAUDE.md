@@ -47,6 +47,15 @@ email is sent to **admin@dermodel.app**.
 - **`OptimizedIngredientDatabase.tsx`**: renders `<ProductSubmissionHelp />`
   next to the Product Database h2.
 
+### UI polish (2026-07-10)
+- Tooltip pops to the **right**, rectangular, split into two lines after
+  "product?" ("Don't see your product?" / "Submit it here").
+- **Product rows**: like count now renders as a plain number inside
+  `ProductFavoriteButton` (new `likeCount` prop), next to the heart; the
+  separate rose heart+count span in `ProductTable` was removed; counts of 0
+  are not shown. (Ingredient rows keep their single rose heart+count — there
+  is no favorite button for ingredients — and already hide 0s.)
+
 ### Verified (dev server + browser)
 ✅ Tooltip opens, "here" opens centered dialog ✅ URL validation error shows
 ✅ Bad insert shows graceful error (table 404s until migration applied)

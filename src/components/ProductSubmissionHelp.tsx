@@ -90,15 +90,18 @@ export const ProductSubmissionHelp = () => {
             <HelpCircle className="h-4 w-4" />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="right" className="text-xs">
-          Don't see your product? Submit it{' '}
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="text-violet-300 underline underline-offset-2 hover:text-violet-200 font-medium"
-          >
-            here
-          </button>
+        <TooltipContent side="right" className="text-xs px-3 py-2">
+          <p>Don't see your product?</p>
+          <p>
+            Submit it{' '}
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              className="text-violet-300 underline underline-offset-2 hover:text-violet-200 font-medium"
+            >
+              here
+            </button>
+          </p>
         </TooltipContent>
       </Tooltip>
 
@@ -109,7 +112,7 @@ export const ProductSubmissionHelp = () => {
               <DialogTitle>Thank you for your submission!</DialogTitle>
               <DialogDescription className="pt-2">
                 A team member will verify this product and add it to our database
-                shortly. We value your contribution to our community.
+                shortly. We value your contribution to our community :)
               </DialogDescription>
             </DialogHeader>
           ) : (

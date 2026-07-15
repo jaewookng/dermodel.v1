@@ -8,10 +8,12 @@ import { useProductFavorites } from '@/hooks/useProductFavorites';
 
 interface ProductFavoriteButtonProps {
   productId: string;
+  /** Global like count shown next to the heart; hidden when 0 */
+  likeCount?: number;
   className?: string;
 }
 
-export const ProductFavoriteButton = ({ productId, className }: ProductFavoriteButtonProps) => {
+export const ProductFavoriteButton = ({ productId, likeCount = 0, className }: ProductFavoriteButtonProps) => {
   const { session } = useAuth();
   const { isFavorite, addFavorite, removeFavorite } = useProductFavorites();
   const [loginOpen, setLoginOpen] = useState(false);
@@ -53,6 +55,9 @@ export const ProductFavoriteButton = ({ productId, className }: ProductFavoriteB
         title={favorite ? 'Remove from favorites' : 'Add to favorites'}
       >
         <Heart className={`h-4 w-4 ${favorite ? 'fill-red-500 text-red-500' : 'text-gray-400'}`} />
+        {likeCount > 0 && (
+          <span className="ml-1 text-xs text-gray-500">{likeCount}</span>
+        )}
       </Button>
       <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
     </>
