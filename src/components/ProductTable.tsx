@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Product } from '@/hooks/useIngredients';
 import { ProductIngredients } from './ProductIngredients';
+import { ProductImage } from './ProductImage';
 import { ProductFavoriteButton } from './ProductFavoriteButton';
 import type { GraphTarget } from '@/hooks/useGraphData';
 
@@ -82,6 +83,7 @@ export const ProductTable = ({ products, onIngredientClick, expandedId, onOpenGr
                   <TableRow className="pointer-events-auto">
                     <TableCell colSpan={4} className="p-3 bg-gray-50 pointer-events-auto">
                       <div className="space-y-2 text-xs pointer-events-auto">
+                        <ProductImage product={product} />
                         <ProductIngredients
                           productId={product.product_id}
                           productName={product.product_name}

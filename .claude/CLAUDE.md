@@ -18,6 +18,68 @@ This document outlines the steps to remove "Lovable" branding from your project 
 
 ---
 
+## ⭐ FEATURE: Product Images — SkinSafe Hotlinks (2026-07-16, FINAL DESIGN)
+
+**Status**: ✅ **CODE COMPLETE — requires DB migration + one-time import**
+
+### Overview
+Every product card shows its photo at the top of the expanded row, above the
+ingredients list. Images are **hotlinked** from the SkinSafe CDN (the origin
+of the sss.csv dataset) — **never copied or proxied** (server-test posture).
+A visible credit line ("Image: cdn1.skinsafeproducts.com") links to the
+source product page. This design SUPERSEDES the earlier OBF/CSE pipeline
+(built then removed in the same session — see git history if ever needed).
+
+### Components
+- **`supabase/migrations/20260715_product_images.sql`**: adds
+  `image_source_url` + `image_attribution` to `sss_products`; re-creates
+  `sss_products_ranked` including them (with existing `image_url`).
+- **`scripts/import_skinsafe_images.py`** (one-time, re-runnable): reads
+  `/Users/jaewookang/Downloads/sss.csv` (`image_url` + `product_url` cols),
+  matches DB products by exact `product_name`, bulk-upserts via PostgREST
+  (`resolution=merge-duplicates`, 500/batch). `--dry-run` works with anon key.
+- **`src/components/ProductImage.tsx`**: rendered in `ProductTable` expanded
+  row above `ProductIngredients`. `referrerpolicy="no-referrer"` (avoids
+  referer-based hotlink blocks), `onError` hides the whole block, lazy
+  loading, credit link below. Renders nothing when `image_url` is null.
+- `Product` type + `useProducts` mapping carry `image_url` /
+  `image_source_url` / `image_attribution`.
+
+### Verified (2026-07-16)
+✅ Dry-run: **50,346 / 50,346 products matched** to an image link (100%)
+✅ SkinSafe CDN serves to referer-less browser embeds (800×600 loads in-app)
+✅ Image + credit render above "Ingredients (N)" in expanded card
+✅ Null image_url → card renders normally with no image block
+✅ tsc + build + py_compile clean
+
+### ⚠️ Action Required
+```bash
+supabase db push                                   # includes 20260715
+export SUPABASE_SERVICE_KEY=...                    # post-rotation key
+python3 scripts/import_skinsafe_images.py          # one-time seed (~2 min)
+```
+
+### Risk posture (accepted 2026-07-16)
+Hotlinks only — no reproduction. If SkinSafe blocks or churns URLs, images
+degrade gracefully (onError hides them); recovery would be re-running the
+import with fresh URLs or building an alternative source. Do NOT copy or
+proxy these images through our own infrastructure.
+
+---
+
+## 🗑️ REMOVED: OBF/CSE Image Pipeline (built + removed 2026-07-15/16)
+
+Superseded by the SkinSafe hotlink design above before ever being deployed.
+Removed: `scripts/fetch_product_images.py` (Open Beauty Facts bulk matcher),
+`scripts/hotlink_product_images.py` (Google CSE bulk hotlinker),
+`supabase/functions/resolve-product-image` (on-demand resolver),
+`.github/workflows/product-images.yml`. No DB objects were ever created for
+it (the earlier 20260715 draft with storage bucket + image_license +
+image_checked_at was rewritten before `db push`). Recoverable from git
+history if OBF licensed-image upgrading is ever wanted again.
+
+---
+
 ## ⭐ FEATURE: User Product Submissions (2026-07-09)
 
 **Status**: ✅ **CODE COMPLETE — requires DB migration + edge function deploy**

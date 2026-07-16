@@ -22,6 +22,10 @@ export interface Product {
   ingredient_count: number | null;
   // Popularity: total times this product was liked across all users (global)
   like_count?: number;
+  // Hotlinked product image (SkinSafe CDN) + source credit
+  image_url?: string | null;
+  image_source_url?: string | null;
+  image_attribution?: string | null;
 }
 
 export const useIngredients = (filters: FilterParams = {}) => {
@@ -145,6 +149,9 @@ export const useProducts = () => {
               product_name: row.product_name!,
               ingredient_count: row.ingredient_count,
               like_count: row.like_count || 0,
+              image_url: row.image_url ?? null,
+              image_source_url: row.image_source_url ?? null,
+              image_attribution: row.image_attribution ?? null,
             }));
           allProducts = [...allProducts, ...mapped];
           from += batchSize;

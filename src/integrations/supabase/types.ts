@@ -213,18 +213,24 @@ export type Database = {
           product_name: string
           ingredient_count: number | null
           image_url: string | null
+          image_source_url: string | null
+          image_attribution: string | null
         }
         Insert: {
           product_id: string
           product_name: string
           ingredient_count?: number | null
           image_url?: string | null
+          image_source_url?: string | null
+          image_attribution?: string | null
         }
         Update: {
           product_id?: string
           product_name?: string
           ingredient_count?: number | null
           image_url?: string | null
+          image_source_url?: string | null
+          image_attribution?: string | null
         }
         Relationships: []
       }
@@ -277,6 +283,8 @@ export type Database = {
           product_name: string | null
           ingredient_count: number | null
           image_url: string | null
+          image_source_url: string | null
+          image_attribution: string | null
           like_count: number | null
         }
         Relationships: []
