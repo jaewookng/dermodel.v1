@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { useProductFavorites } from '@/hooks/useProductFavorites'
+import { ShareFavoritesButton } from '@/components/ShareFavoritesButton'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -48,10 +49,11 @@ export const Favorites = () => {
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <div>
+          <div className="flex-1">
             <h1 className="text-3xl font-bold">Favorites</h1>
             <p className="text-gray-600">Your curated collection of skincare items</p>
           </div>
+          <ShareFavoritesButton />
         </div>
 
         {/* Favorite Products */}
@@ -82,9 +84,22 @@ export const Favorites = () => {
                 <Card key={favorite.id} className="hover:shadow-md transition-shadow">
                   <CardContent className="pt-6 flex items-center justify-between">
                     <div className="flex-1">
-                      <h3 className="text-lg font-semibold">
+                      <button
+                        onClick={() =>
+                          navigate('/', {
+                            state: {
+                              tab: 'products' as const,
+                              openProduct: {
+                                id: favorite.product_id,
+                                name: favorite.sss_products?.product_name || '',
+                              },
+                            },
+                          })
+                        }
+                        className="text-lg font-semibold text-left hover:text-violet-700 hover:underline"
+                      >
                         {favorite.sss_products?.product_name || favorite.product_id}
-                      </h3>
+                      </button>
                       {favorite.sss_products?.ingredient_count !== undefined && (
                         <p className="text-sm text-gray-600 mt-1">
                           {favorite.sss_products?.ingredient_count || 0} ingredients

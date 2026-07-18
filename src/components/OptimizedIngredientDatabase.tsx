@@ -15,11 +15,14 @@ type TabView = 'ingredients' | 'products';
 
 interface OptimizedIngredientDatabaseProps {
   initialTab?: TabView;
+  /** Deep-link target: opens the Products tab with this product's card expanded */
+  initialProduct?: { id: string; name: string } | null;
   onOpenGraph?: (target: GraphTarget) => void;
 }
 
 const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
   initialTab = 'ingredients',
+  initialProduct = null,
   onOpenGraph,
 }: OptimizedIngredientDatabaseProps) {
   const [activeTab, setActiveTab] = useState<TabView>(initialTab);
@@ -34,6 +37,15 @@ const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
   // For cross-navigation between tabs
   const [expandedIngredientId, setExpandedIngredientId] = useState<string | null>(null);
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+
+  // Deep link from other pages (e.g. Favorites): open a specific product card
+  useEffect(() => {
+    if (!initialProduct) return;
+    setActiveTab('products');
+    setProductSearch(initialProduct.name);
+    setExpandedProductId(initialProduct.id);
+    setProductPage(1);
+  }, [initialProduct]);
 
   const {
     filters,

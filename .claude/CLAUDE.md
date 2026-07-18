@@ -18,6 +18,52 @@ This document outlines the steps to remove "Lovable" branding from your project 
 
 ---
 
+## ⭐ FEATURE: Shareable Favorites + Deep Links (2026-07-17)
+
+**Status**: ✅ **CODE COMPLETE — requires DB migration**
+
+### Overview
+1. Product names on **/favorites** are clickable → main page opens the
+   Products tab with that product's card expanded.
+2. A **Share icon** (box-with-up-arrow, top right of /favorites) opens a
+   dialog that enables sharing (opt-in), shows the public link
+   `/u/<user_id>`, copies it, and can "Stop sharing". The public page shows
+   "{username}'s Favorite Products" to anyone — no login required.
+
+### Components
+- **`supabase/migrations/20260717_public_favorites.sql`**: adds
+  `profiles.favorites_public BOOLEAN DEFAULT false`; creates
+  `public_favorites` view (owner-rights, same pattern as sss_*_ranked) that
+  joins favorites+profiles+products **only where favorites_public** and
+  exposes username + product fields (incl. image) — never email. GRANT
+  SELECT to anon+authenticated.
+- **Deep-link mechanism**: `navigate('/', { state: { tab: 'products',
+  openProduct: { id, name } } })`; Index passes `initialProduct` to
+  `OptimizedIngredientDatabase`, which sets tab/productSearch/
+  expandedProductId. Used by both Favorites and SharedFavorites.
+- **`src/components/ShareFavoritesButton.tsx`** (NEW): Share icon + dialog;
+  flips `favorites_public` via direct profiles update; clipboard copy.
+- **`src/pages/SharedFavorites.tsx`** (NEW, route `/u/:userId`, public):
+  reads `public_favorites` via publicClient; product thumbnails; clickable
+  names → deep link; graceful "private, empty, or doesn't exist" state.
+- `types.ts`: profiles.favorites_public + public_favorites view;
+  AuthContext fallback profile includes `favorites_public: false`.
+
+### Verified (dev server, 2026-07-17)
+✅ `/u/<unknown-id>` renders graceful private/empty state (pre-migration)
+✅ Deep link (simulated navigate state with real product id) → Products tab,
+search prefilled, correct card expanded with ingredients + image block
+✅ tsc + build clean
+⚠️ Share dialog flow needs a signed-in session — untested in-browser; verify
+after `db push` (flip on → link works, "Stop sharing" → /u page goes empty).
+
+### ⚠️ Action Required
+```bash
+supabase db push          # includes 20260717_public_favorites.sql
+```
+
+---
+
 ## ⭐ FEATURE: Product Images — SkinSafe Hotlinks (2026-07-16, FINAL DESIGN)
 
 **Status**: ✅ **CODE COMPLETE — requires DB migration + one-time import**

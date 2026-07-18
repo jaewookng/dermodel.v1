@@ -38,6 +38,7 @@ const getFallbackProfileFromSession = (session: Session | null): ProfileRow | nu
     bio: null,
     skin_type: null,
     skin_concerns: null,
+    favorites_public: false,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }

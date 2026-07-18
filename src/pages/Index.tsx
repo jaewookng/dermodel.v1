@@ -25,8 +25,12 @@ const Index = () => {
   const [signingOut, setSigningOut] = useState(false);
   const [graphTarget, setGraphTarget] = useState<GraphTarget | null>(null);
 
-  const initialTab =
-    ((location.state as { tab?: 'ingredients' | 'products' } | null)?.tab) || 'ingredients';
+  const navState = location.state as {
+    tab?: 'ingredients' | 'products';
+    openProduct?: { id: string; name: string };
+  } | null;
+  const initialTab = navState?.tab || 'ingredients';
+  const initialProduct = navState?.openProduct || null;
 
   const handleSignOut = async () => {
     try {
@@ -144,7 +148,11 @@ const Index = () => {
       {/* Compact Ingredient Database Overlay - Fixed on the right */}
       <div className="fixed top-0 right-0 w-96 h-screen p-4 pointer-events-none z-10">
         <div className="bg-white/95 backdrop-blur-sm rounded-lg shadow-2xl h-full overflow-hidden pointer-events-auto">
-          <OptimizedIngredientDatabase initialTab={initialTab} onOpenGraph={setGraphTarget} />
+          <OptimizedIngredientDatabase
+            initialTab={initialTab}
+            initialProduct={initialProduct}
+            onOpenGraph={setGraphTarget}
+          />
         </div>
       </div>
     </div>

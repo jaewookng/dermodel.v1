@@ -7,6 +7,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import Index from "./pages/Index";
 import { Settings } from "./pages/Settings";
 import { Favorites } from "./pages/Favorites";
+import SharedFavorites from "./pages/SharedFavorites";
 import { SkinProfile } from "./pages/SkinProfile";
 import { Support } from "./pages/Support";
 import NotFound from "./pages/NotFound";
@@ -63,6 +64,8 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
+            {/* Public shared-favorites profile — intentionally NOT protected */}
+            <Route path="/u/:userId" element={<SharedFavorites />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

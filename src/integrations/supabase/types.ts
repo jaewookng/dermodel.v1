@@ -37,6 +37,7 @@ export type Database = {
           bio: string | null
           skin_type: SkinType[] | null
           skin_concerns: SkinConcern[] | null
+          favorites_public: boolean
           created_at: string
           updated_at: string
         }
@@ -48,6 +49,7 @@ export type Database = {
           bio?: string | null
           skin_type?: SkinType[] | null
           skin_concerns?: SkinConcern[] | null
+          favorites_public?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -59,6 +61,7 @@ export type Database = {
           bio?: string | null
           skin_type?: SkinType[] | null
           skin_concerns?: SkinConcern[] | null
+          favorites_public?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -286,6 +289,20 @@ export type Database = {
           image_source_url: string | null
           image_attribution: string | null
           like_count: number | null
+        }
+        Relationships: []
+      }
+      public_favorites: {
+        Row: {
+          user_id: string | null
+          username: string | null
+          product_id: string | null
+          product_name: string | null
+          ingredient_count: number | null
+          image_url: string | null
+          image_source_url: string | null
+          image_attribution: string | null
+          created_at: string | null
         }
         Relationships: []
       }
