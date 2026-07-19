@@ -18,6 +18,33 @@ This document outlines the steps to remove "Lovable" branding from your project 
 
 ---
 
+## ⚡ PERF: Server-Side Product Pagination + Search (2026-07-19)
+
+**Status**: ✅ **COMPLETE — no DB change needed**
+
+The Products tab previously fetched **all ~50k rows** from
+`sss_products_ranked` in 51 sequential 1000-row batches (~15+ MB, re-run on
+every tab mount via `refetchOnMount: 'always'`), then searched/paginated
+client-side. Now:
+- **`useProducts(filters)`** (`useIngredients.ts`): takes
+  `{ search, page, limit }`, returns `{ data, totalCount }`. One request per
+  page: explicit column select + `{ count: 'exact' }`, `.ilike` on
+  `product_name` for search, `.order(like_count desc, product_name asc)`
+  (matches the 20260603 composite index), `.range()` for the page.
+  `placeholderData: keepPreviousData` prevents flicker while paging/typing;
+  dropped the forced refetch (inherits app default).
+- **`OptimizedIngredientDatabase.tsx`**: products search debounced 300ms via
+  existing `useDebounce`; client-side filter/slice removed; pagination uses
+  the server `totalCount`.
+- Deep links (Favorites/shared page → product card) go through the same
+  server-side search path.
+
+### Verified (dev server, 2026-07-19)
+✅ Tab load = ONE ~10-row request (was 51) ✅ search "dokdo" → 1 ilike
+request, "1-10 of 17", correct rows ✅ page 2 → "11-17 of 17" ✅ tsc + build
+
+---
+
 ## ⭐ FEATURE: Shareable Favorites + Deep Links (2026-07-17)
 
 **Status**: ✅ **CODE COMPLETE — requires DB migration**
@@ -59,8 +86,18 @@ after `db push` (flip on → link works, "Stop sharing" → /u page goes empty).
 
 ### ⚠️ Action Required
 ```bash
-supabase db push          # includes 20260717_public_favorites.sql
+supabase db push          # includes 20260717_public_favorites.sql  [DONE 2026-07-17]
+firebase deploy --only hosting   # SPA rewrite fix — see below
 ```
+
+### 🔧 FIX (2026-07-18): Share links 403'd — hosting rewrite, not RLS
+`/u/<id>` returned Google's "Forbidden" page: firebase.json rewrote `**` to
+the IAM-protected Cloud Run service `dermodel-v1` (v1 leftover), so ANY
+hard-loaded SPA route (including /favorites on refresh) 403'd before the app
+loaded; `/` worked only because dist/index.html is served statically.
+Verified RLS was fine (anon fetch of public_favorites returned the user's
+shared rows). Fix: standard SPA rewrite `** → /index.html`. Needs
+`firebase deploy --only hosting` (dist freshly rebuilt).
 
 ---
 

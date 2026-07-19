@@ -1,7 +1,8 @@
-import { useCallback, useState, useMemo, useEffect, memo } from 'react';
+import { useCallback, useState, useEffect, memo } from 'react';
 import { Database, Search, Pipette } from 'lucide-react';
 import { useIngredients, useIngredientsCount, useProducts, useProductsCount } from '@/hooks/useIngredients';
 import { useIngredientFilters } from '@/hooks/useIngredientFilters';
+import { useDebounce } from '@/hooks/useDebounce';
 import { IngredientTable } from './IngredientTable';
 import { ProductTable } from './ProductTable';
 import { ProductSubmissionHelp } from './ProductSubmissionHelp';
@@ -62,25 +63,26 @@ const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
   const { data: ingredientsResponse, isLoading, error, isFetching } = useIngredients(queryParams);
   const { data: totalIngredientCount = 0 } = useIngredientsCount();
 
-  // Products data
-  const { data: allProducts = [], isLoading: productsLoading, error: productsError } = useProducts();
+  // Products data — one server-side filtered/ordered page per request
+  const debouncedProductSearch = useDebounce(productSearch, 300);
+  const {
+    data: productsResponse,
+    isLoading: productsLoading,
+    error: productsError,
+  } = useProducts({
+    search: debouncedProductSearch,
+    page: productPage,
+    limit: productsPerPage,
+  });
   const { data: totalProductCount = 0 } = useProductsCount();
 
   const ingredients = ingredientsResponse?.data || [];
   const displayedCount = ingredientsResponse?.totalCount || 0;
   const totalPages = Math.ceil(displayedCount / pagination.itemsPerPage);
 
-  // Filter and paginate products
-  const filteredProducts = useMemo(() => {
-    if (!productSearch) return allProducts;
-    return allProducts.filter(p => p.product_name.toLowerCase().includes(productSearch.toLowerCase()));
-  }, [allProducts, productSearch]);
-
-  const totalProductPages = Math.ceil(filteredProducts.length / productsPerPage);
-  const paginatedProducts = filteredProducts.slice(
-    (productPage - 1) * productsPerPage,
-    productPage * productsPerPage
-  );
+  const paginatedProducts = productsResponse?.data || [];
+  const filteredProductCount = productsResponse?.totalCount || 0;
+  const totalProductPages = Math.ceil(filteredProductCount / productsPerPage);
 
   const handlePageChange = useCallback((page: number) => {
     setCurrentPage(page);
@@ -318,7 +320,7 @@ const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
                     currentPage={productPage}
                     totalPages={totalProductPages}
                     itemsPerPage={productsPerPage}
-                    totalItems={filteredProducts.length}
+                    totalItems={filteredProductCount}
                     onPageChange={handleProductPageChange}
                     onItemsPerPageChange={() => {}}
                   />

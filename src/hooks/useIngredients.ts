@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { supabasePublic } from '@/integrations/supabase/publicClient';
 import { ProcessedIngredient } from '@/lib/ingredientProcessor';
 
@@ -117,60 +117,67 @@ export const useIngredientsCount = () => {
   });
 };
 
-// Hook for fetching all products
-export const useProducts = () => {
+interface ProductFilterParams {
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+interface ProductsResponse {
+  data: Product[];
+  totalCount: number;
+}
+
+// Hook for fetching one page of products, filtered/ordered server-side.
+// (Previously fetched all ~50k rows in 51 sequential batches and filtered
+// client-side — a page is now a single ~10-row request. Ordering is
+// index-backed via 20260603_popularity_indexed_counters.)
+export const useProducts = (filters: ProductFilterParams = {}) => {
+  const { page = 1, limit = 10, search } = filters;
+
   return useQuery({
-    queryKey: ['products'],
-    queryFn: async (): Promise<Product[]> => {
-      let allProducts: Product[] = [];
-      let from = 0;
-      const batchSize = 1000; // Supabase default limit
+    queryKey: ['products', { page, limit, search }],
+    queryFn: async (): Promise<ProductsResponse> => {
+      let query = supabasePublic
+        .from('sss_products_ranked')
+        .select(
+          'product_id,product_name,ingredient_count,like_count,image_url,image_source_url,image_attribution',
+          { count: 'exact' }
+        );
 
-      while (true) {
-        // Read from the ranked view so products default to popularity order
-        // (like_count = total likes across all users), then name as tiebreaker.
-        const { data, error } = await supabasePublic
-          .from('sss_products_ranked')
-          .select('*')
-          .order('like_count', { ascending: false })
-          .order('product_name', { ascending: true })
-          .range(from, from + batchSize - 1);
+      if (search?.trim())
+        query = query.ilike('product_name', `%${search.trim()}%`);
 
-        if (error) {
-          console.error('❌ Supabase error fetching products:', error);
-          throw error;
-        }
+      // Popularity order (like_count = total likes across all users), then
+      // name as a stable tiebreaker — matches the composite index.
+      query = query
+        .order('like_count', { ascending: false })
+        .order('product_name', { ascending: true });
 
-        if (data && data.length > 0) {
-          const mapped: Product[] = data
-            .filter(row => row.product_id && row.product_name)
-            .map(row => ({
-              product_id: row.product_id!,
-              product_name: row.product_name!,
-              ingredient_count: row.ingredient_count,
-              like_count: row.like_count || 0,
-              image_url: row.image_url ?? null,
-              image_source_url: row.image_source_url ?? null,
-              image_attribution: row.image_attribution ?? null,
-            }));
-          allProducts = [...allProducts, ...mapped];
-          from += batchSize;
+      const from = (page - 1) * limit;
+      const { data, count, error } = await query.range(from, from + limit - 1);
 
-          // Stop if we got less than a full batch (no more data)
-          if (data.length < batchSize) {
-            break;
-          }
-        } else {
-          break;
-        }
-      }
+      if (error) throw error;
 
-      return allProducts;
+      const mapped: Product[] = (data || [])
+        .filter(row => row.product_id && row.product_name)
+        .map(row => ({
+          product_id: row.product_id!,
+          product_name: row.product_name!,
+          ingredient_count: row.ingredient_count,
+          like_count: row.like_count || 0,
+          image_url: row.image_url ?? null,
+          image_source_url: row.image_source_url ?? null,
+          image_attribution: row.image_attribution ?? null,
+        }));
+
+      return { data: mapped, totalCount: count || 0 };
     },
-    enabled: true,
+    // Keep the previous page visible while the next one loads (no flicker
+    // when paging or typing a search).
+    placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
-    refetchOnMount: 'always',
     refetchOnWindowFocus: false,
   });
 };
