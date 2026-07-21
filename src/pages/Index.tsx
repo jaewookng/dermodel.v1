@@ -29,7 +29,7 @@ const Index = () => {
     tab?: 'ingredients' | 'products';
     openProduct?: { id: string; name: string };
   } | null;
-  const initialTab = navState?.tab || 'ingredients';
+  const initialTab = navState?.tab || 'products';
   const initialProduct = navState?.openProduct || null;
 
   const handleSignOut = async () => {

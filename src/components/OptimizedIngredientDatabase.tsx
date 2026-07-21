@@ -22,7 +22,7 @@ interface OptimizedIngredientDatabaseProps {
 }
 
 const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
-  initialTab = 'ingredients',
+  initialTab = 'products',
   initialProduct = null,
   onOpenGraph,
 }: OptimizedIngredientDatabaseProps) {
@@ -121,17 +121,6 @@ const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
       {/* Tab Switcher */}
       <div className="flex items-center gap-1 mb-3 border-b border-gray-200">
         <button
-          onClick={() => setActiveTab('ingredients')}
-          className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'ingredients'
-              ? 'border-violet-600 text-violet-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          <Database className="h-4 w-4" />
-          Ingredients
-        </button>
-        <button
           onClick={() => setActiveTab('products')}
           className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
             activeTab === 'products'
@@ -141,6 +130,17 @@ const OptimizedIngredientDatabase = memo(function OptimizedIngredientDatabase({
         >
           <Pipette className="h-4 w-4" />
           Products
+        </button>
+        <button
+          onClick={() => setActiveTab('ingredients')}
+          className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'ingredients'
+              ? 'border-violet-600 text-violet-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <Database className="h-4 w-4" />
+          Ingredients
         </button>
       </div>
 
