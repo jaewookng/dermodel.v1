@@ -64,8 +64,9 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            {/* Public shared-favorites profile — intentionally NOT protected */}
-            <Route path="/u/:userId" element={<SharedFavorites />} />
+            {/* Public shared-favorites profile — intentionally NOT protected.
+                :handle is a username, or a legacy user_id UUID. */}
+            <Route path="/u/:handle" element={<SharedFavorites />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

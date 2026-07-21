@@ -30,3 +30,6 @@ __pycache__/
 *.njsproj
 *.sln
 *.sw?
+
+# Local DB backups (data snapshots, not source)
+backups/

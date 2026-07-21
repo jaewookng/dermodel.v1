@@ -27,7 +27,9 @@ export const ShareFavoritesButton = () => {
 
   if (!user) return null;
 
-  const shareUrl = `${window.location.origin}/u/${user.id}`;
+  // Prefer the readable username link; fall back to the id if unset.
+  // /u/:handle resolves both (SharedFavorites).
+  const shareUrl = `${window.location.origin}/u/${encodeURIComponent(user.username || user.id)}`;
 
   const setPublic = async (value: boolean) => {
     setSaving(true);

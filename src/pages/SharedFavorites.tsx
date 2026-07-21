@@ -5,28 +5,37 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { ArrowLeft, Heart } from 'lucide-react';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Escape ilike wildcards so a username is matched literally (case-insensitive)
+const escapeIlike = (s: string) => s.replace(/[\\%_]/g, '\\$&');
+
 /**
- * Public favorites profile at /u/<user_id> — readable without signing in.
- * Backed by the public_favorites view, which only returns rows for users
- * who enabled sharing (profiles.favorites_public).
+ * Public favorites profile at /u/<username> (or legacy /u/<user_id>) —
+ * readable without signing in. Backed by the public_favorites view, which
+ * only returns rows for users who enabled sharing (profiles.favorites_public).
  */
 const SharedFavorites = () => {
-  const { userId } = useParams<{ userId: string }>();
+  const { handle } = useParams<{ handle: string }>();
   const navigate = useNavigate();
 
   const { data: favorites, isLoading } = useQuery({
-    queryKey: ['public-favorites', userId],
+    queryKey: ['public-favorites', handle],
     queryFn: async () => {
-      if (!userId) return [];
-      const { data, error } = await supabasePublic
+      if (!handle) return [];
+      let query = supabasePublic
         .from('public_favorites')
         .select('*')
-        .eq('user_id', userId)
         .order('created_at', { ascending: false });
+      // Username links are the norm; UUID-shaped handles are legacy id links
+      query = UUID_RE.test(handle)
+        ? query.eq('user_id', handle)
+        : query.ilike('username', escapeIlike(handle));
+      const { data, error } = await query;
       if (error) throw error;
       return data || [];
     },
-    enabled: !!userId,
+    enabled: !!handle,
   });
 
   const username = favorites?.[0]?.username || null;

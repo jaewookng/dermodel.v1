@@ -18,6 +18,50 @@ This document outlines the steps to remove "Lovable" branding from your project 
 
 ---
 
+## 🗑️ CLEANUP: Drop ingredient_stats (2026-07-20)
+
+**Status**: ✅ migration written — apply with `supabase db push`
+
+`ingredient_stats` in the live DB was a hand-created relation (predates the
+tracked migration history) duplicating `sss_ingredients_ranked` minus
+`like_count` — verified identical row count (21,192) and values, zero
+references in app/scripts/migrations, and it was exposed to anon.
+**`supabase/migrations/20260720_drop_ingredient_stats.sql`** drops it via a
+DO block (handles view/matview/table, idempotent).
+
+---
+
+## ⭐ FEATURE: Username Share Links (2026-07-19)
+
+**Status**: ✅ **CODE COMPLETE — requires DB migration**
+
+Share links are now `dermodel.app/u/<username>` (URL-encoded; falls back to
+the id when username is null). Legacy `/u/<user_id>` UUID links keep working.
+- **`supabase/migrations/20260719_username_share_links.sql`**: dedupes
+  existing usernames case-insensitively (oldest keeps the name, later ones
+  get `-N` suffix), adds unique index on `lower(username)`, and rewrites
+  `handle_new_user()` to pick the next free suffix on signup collision
+  (keeps SECURITY DEFINER + pinned search_path).
+- **`SharedFavorites.tsx`**: route param is now `:handle`; UUID-shaped
+  handles query `user_id`, everything else does a case-insensitive
+  literal `ilike` on `username` (wildcards escaped).
+- **`ShareFavoritesButton.tsx`**: generates the username link.
+- ⚠️ Caveats: renaming a username breaks previously shared username links
+  (uuid links survive); once the unique index is live, a Settings username
+  update to a taken name will error — no friendly message yet.
+
+### Verified (dev server, 2026-07-19, live data)
+✅ `/u/jaewookng` → "jaewookng's Favorite Products" + product list
+✅ `/u/JAEWOOKNG` (case-insensitive) ✅ legacy `/u/<uuid>` still resolves
+✅ unknown handle → graceful empty state ✅ tsc + build clean
+
+### ⚠️ Action Required
+```bash
+supabase db push          # includes 20260719_username_share_links.sql
+```
+
+---
+
 ## ⚡ PERF: Server-Side Product Pagination + Search (2026-07-19)
 
 **Status**: ✅ **COMPLETE — no DB change needed**
