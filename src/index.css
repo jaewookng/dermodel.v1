@@ -122,3 +122,74 @@
 .animate-fade-in {
   animation: fade-in 0.3s ease-out forwards;
 }
+
+/* Bella — floating bubble + chat panel animations */
+@keyframes bella-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.animate-bella-float {
+  animation: bella-float 3.2s ease-in-out infinite;
+}
+
+@keyframes bella-dot {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+.animate-bella-dot {
+  animation: bella-dot 1.4s ease-in-out infinite;
+}
+
+/* Slow specular sweep across the bubble — subtle, not a game shine */
+@keyframes bella-sheen {
+  0%, 70%, 100% {
+    transform: translateX(0);
+  }
+  35% {
+    transform: translateX(700%);
+  }
+}
+
+.animate-bella-sheen {
+  animation: bella-sheen 7s ease-in-out infinite;
+}
+
+@keyframes bella-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-bella-panel-in {
+  animation: bella-panel-in 0.28s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes bella-caret {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+.animate-bella-caret {
+  animation: bella-caret 0.9s step-end infinite;
+}

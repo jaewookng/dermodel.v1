@@ -12,9 +12,189 @@
 
 This document serves as the single source of truth for project status and development direction.
 
+### ⚠️ Migration naming: one migration per date
+Supabase derives a migration's **version** from the leading digits of the
+filename, and this repo names them `YYYYMMDD_slug.sql` — so the version is
+**date-only** and two migrations dated the same day collide. Hit on 2026-08-18:
+`20260818_billing.sql` and `20260818_co_favorites.sql` both resolved to version
+`20260818`; the first applied and recorded, the second failed with
+`duplicate key ... schema_migrations_pkey` and **rolled back entirely** (verified
+the view was absent afterward, so no partial state). Fix was renaming the second
+to `20260819_co_favorites.sql`. When adding a migration, check for an existing
+file with the same date prefix and bump the date (or switch to full
+`YYYYMMDDHHMMSS` timestamps) before pushing.
+
 ---
 
 This document outlines the steps to remove "Lovable" branding from your project and to enhance the 3D facial model's user interface for a more delightful experience.
+
+---
+
+## 🤖 FEATURE: Bella — Grounded AI Assistant (2026-07-20, UI 2026-08-18)
+
+**Status**: ✅ **CODE COMPLETE — needs `db push` + 2 function deploys**
+
+### ⚠️ Action Required
+```bash
+supabase db push                             # includes 20260819_co_favorites.sql
+supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+supabase functions deploy chat               # (already deployed as of 2026-08-18)
+supabase functions deploy bella-hooks        # NOT yet deployed
+```
+
+### Bella's opening hooks (2026-08-18) — server-side, ZERO LLM
+The assistant is named **Bella** and is immediately useful before the user types
+anything. **`supabase/functions/bella-hooks`** (NEW) returns clickbait one-liners
+built from **fixed templates with data slots**, filled by few-hop traversal over
+our own tables. No Anthropic call, no per-impression cost — the LLM only starts
+when the user **clicks** a hook, which sends that hook's `prompt` to `chat`.
+
+Response: `{ hooks: [{ id, text, prompt, kind }], personalized }`.
+`text` shows in the bubble; `prompt` is what gets asked on click.
+
+- **Case 1 — new/browsing** (no favorites or signed out): hottest product and
+  ingredient by `like_count`, plus a static arsenal (nighttime routine, safety
+  check, start your cabinet, heart products to get started, sensitive skin).
+- **Case 2 — returning w/ favorites** (RLS-scoped via forwarded JWT):
+  - Hop 1: a random saved product's ingredients.
+  - Picks a *distinctive* ingredient (`product_count` 15–4000, so not
+    water/glycerin), highest `like_count`.
+  - Hop 2: other products with it, minus already-saved → *"I found N new
+    products that would go well with X"*.
+  - Hop 3: that set minus anything matching `%paraben%` → *"Y is like X — and
+    it's paraben free"*.
+  - Hop 2': `sss_co_favorites` → *"People who saved X also liked Y"*.
+  - Plus personal fallbacks (overlap check, what's missing).
+- Every query goes through `tryGet` (swallows errors → `[]`), so an unbuildable
+  hook is dropped rather than failing the response — which is also how the
+  co-favorites hook **degrades silently until its migration is applied**.
+- **`supabase/migrations/20260819_co_favorites.sql`** (NEW): `sss_co_favorites`
+  view — owner-rights self-join on `product_favorites` giving
+  `(product_id, also_product_id, co_count)`. Same aggregate-only/anon-GRANT
+  posture as `sss_products_ranked`; no `user_id` exposed. ⚠️ Privacy note in the
+  file: at low user counts `co_count = 1` is a weak single-basket signal —
+  raise the caller-side threshold as the user base grows.
+- **`src/hooks/useBellaHooks.ts`** (NEW): React Query wrapper, 5-min
+  `staleTime`, no refetch on focus, keyed by user id so it re-fetches on
+  sign-in/out.
+
+### Bella's UI (2026-08-18) — anchored to the Spline camera, draggable
+Renamed from the earlier "derma" game-style dialogue; `src/components/Chat/`
+was replaced by **`src/components/Bella/`**.
+
+- **`BellaBubble.tsx`**: hangs off the **left** of the face (chirality flipped
+  from the first pass), tail pointing right at it. Rotates through the hooks
+  every 8s with a fade; falls back to three dots while they load. Soft glass
+  card — thin rose border, gradient fill, top highlight, slow sheen sweep, soft
+  rose shadow (no more thick dark game borders).
+- **`BellaChat.tsx`**: glass panel, rose/pink palette, "Bella" speaker chip.
+  **Draggable from anywhere that isn't a control** (pointer capture, clamped to
+  the viewport; `input/textarea/button/a/[data-no-drag]` are excluded, and the
+  transcript carries `data-no-drag` so it stays scrollable/selectable).
+  ⚠️ The drag transform lives on an **outer** wrapper and the entrance animation
+  on an **inner** one — same element and the keyframes clobber the drag offset.
+- **Message plumbing**: messages carry `local` (shown, never sent — greeting and
+  hook lines) and `hidden` (sent, never shown — the prompt behind a hook).
+  `toApiMessages()` drops `local` turns and any assistant turns still leading
+  the list, since the Anthropic API requires the conversation to start with a
+  user turn. Clicking a hook seeds `[assistant(hook text, local), user(prompt,
+  hidden)]` and auto-sends, so Bella appears to just start answering.
+
+### Face anchoring — `FaceModel` now publishes a projected anchor
+`FaceModel` takes `onAnchorChange?: (FaceAnchor | null) => void` and emits
+`{ x, y, scale }` in canvas space, so the bubble tracks the model's real
+position and apparent size instead of a hardcoded percentage.
+
+- **Landmarks, not transforms**: every `face_*` zone mesh sits at the scene
+  origin (the shape is in the geometry; the parent rig `meshed_face_model`
+  carries a 46× scale), so object world positions are all identical and
+  useless. `zoneCentre()` takes each zone's **geometry bounding-box centre**
+  and applies its `matrixWorld`. Forehead→chin distance is the apparent size;
+  `scale = span / REFERENCE_FACE_SPAN_PX (210)`, clamped 0.6–1.8.
+- **Guarded fallback**: Spline owns the camera (it isn't a
+  `THREE.PerspectiveCamera` and there are two THREE instances in the bundle), so
+  a stale matrix could fling the bubble off-screen. If the projection lands
+  outside believable NDC bounds, the anchor falls back to viewport-relative
+  (32% × 44%, scale from height). The overlay can't end up somewhere absurd.
+- **Update loop**: rAF throttled to ~20fps, backed by a 500ms interval plus
+  immediate calls at 0/150/600ms — rAF is paused entirely in a hidden tab, so
+  the interval is what lets the overlay correct itself. Both are torn down in
+  `__raycasterCleanup`. Viewport size falls back through
+  `rect → clientWidth → innerWidth → documentElement.clientWidth`.
+
+### Verified (dev server, 2026-08-18, live `chat` function)
+✅ Bubble renders left of the face, pink/glass, hook text visible
+✅ Click hook → panel opens, hook line shown, prompt auto-sent, **real grounded
+reply** ("Niacinamide … found in over 5,700 products in the Dermodel database")
+with **bold** rendered ✅ follow-up turn works on top of the hidden seed message
+✅ panel drags and stays where dropped ✅ tsc + build clean
+⚠️ **Not verified live**: the projected anchor path. The in-app browser pane
+reports `document.hidden = true` with 0×0 rects and `innerWidth = 0`, so rAF
+never runs and every emit hits the fallback; Chrome MCP wasn't connected. What
+was confirmed by direct scene probing: zone meshes are all at origin, geometry
+centres do separate forehead from chin (world y 5.8 vs −37.3), and the camera
+exposes `projectionMatrix`/`matrixWorldInverse`. **Check the bubble tracks the
+face on a real page load and retune `REFERENCE_FACE_SPAN_PX` if it's off.**
+
+### Superseded first pass (2026-08-18) — Pokemon/game-style, opt-in
+Deliberately not a forced chat widget: a **"..." speech bubble**
+(`src/components/Chat/ChatBubble.tsx`) floats next to the Spline face
+(bobbing, staggered bouncing dots, thick game-style border + offset shadow,
+tail pointing at the face). It lives inside the FaceModel transform container
+in `Index.tsx` (absolute `left-[44%] top-[14%]`) so it **follows the face**
+when the graph panel shifts it left. Clicking it opens
+**`src/components/Chat/ChatPanel.tsx`** — a game dialogue box (bottom-left,
+thick border, violet "derma ✦" speaker tag, close X):
+- **Typewriter effect** for the newest assistant reply (2 chars/18ms,
+  blinking ▮ caret); older messages render instantly (`animateFromIndex`).
+- Greeting message is client-side flavor text and is **stripped before
+  sending** (`messages.slice(1)`) so the model never sees it.
+- Calls `supabase.functions.invoke('chat', { body: { messages } })` —
+  forwards the user JWT automatically (favorites tool works when signed in).
+- Non-streaming `{ reply }` per the edge function's v1 contract; "..."
+  bubble shown while waiting; graceful error line on failure.
+- Panel **stays mounted** (hidden with CSS) so the conversation survives
+  close/reopen; bubble hides while the panel is open.
+- Minimal markdown: `**bold**` rendered via `renderBold`; rest is
+  `whitespace-pre-wrap` plain text.
+- Enter-to-send handled BOTH via form `onSubmit` and input `onKeyDown`
+  (both `preventDefault`) — belt-and-braces against native form submission
+  reloading the SPA.
+- Animations (`chat-bubble-float`, `chat-dot-bounce`, `chat-panel-in`,
+  `chat-caret-blink`) added to `src/index.css`.
+
+### Verified (dev server, 2026-08-18, live edge function)
+✅ Bubble floats by the head; click → panel with typewriter greeting
+✅ Real grounded reply ("what products contain snail mucin?" → 1 product,
+bold rendered) ✅ close → bubble returns; reopen → conversation intact
+✅ tsc + build clean
+
+**Original plan (2026-07-20):**
+
+Interactive skincare chatbot **grounded in our own data**, not a third-party
+bot platform (evaluated Botpress; rejected because the value is live queries
+over `sss_ingredients` / `sss_products`, which a visual flow builder makes
+clunky — DIY with an API key gives tight DB integration, no vendor lock-in,
+and low per-conversation cost).
+
+**Architecture (DIY, fits the existing React + Supabase stack):**
+- **`supabase/functions/chat`** (NEW Edge Function, Deno) — calls the Claude
+  API with **tool use**; the model decides when to query our tables and the
+  function runs the query. Mirrors the structure of the existing
+  `notify-product-submission` function (CORS, env, error handling).
+  - Tools: `search_ingredients(query)`, `get_product` (+ its ingredients via
+    `sss_product_ingredients_join`), `list_products_containing(ingredient)`,
+    and `get_user_favorites` (RLS-scoped by forwarding the caller's JWT).
+  - Public `sss_*` reads via anon/service; per-user favorites via the caller's
+    `Authorization` header so RLS applies.
+  - Secret: `ANTHROPIC_API_KEY` (`supabase secrets set`). Model: Claude
+    Haiku 4.5 for cost/speed; Sonnet for the reasoning-heavy asks.
+- **React chat panel** (follow-up) — small streaming chat UI in the right
+  panel; reuses the same canonicalized data the rest of the app uses.
+
+Depends on `20260721_ingredient_canonicalization` (clean ingredient names make
+tool answers accurate). ⚠️ Not deployed: needs `supabase functions deploy chat`
++ the secret, per the project's write-then-human-deploys convention.
 
 ---
 

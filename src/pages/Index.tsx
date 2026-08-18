@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { FaceModel } from '@/components/FaceModel';
+import { FaceModel, type FaceAnchor } from '@/components/FaceModel';
 import { OptimizedIngredientDatabase } from '@/components/OptimizedIngredientDatabase';
 import { GraphPanel } from '@/components/GraphPanel';
+import { BellaBubble } from '@/components/Bella/BellaBubble';
+import { BellaChat } from '@/components/Bella/BellaChat';
+import { useBellaHooks, type BellaHook } from '@/hooks/useBellaHooks';
 import type { GraphTarget } from '@/hooks/useGraphData';
 import { useAuth } from '@/contexts/AuthContext';
 import { LoginDialog } from '@/components/Auth/LoginDialog';
@@ -24,6 +27,18 @@ const Index = () => {
   const [loginOpen, setLoginOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [graphTarget, setGraphTarget] = useState<GraphTarget | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [faceAnchor, setFaceAnchor] = useState<FaceAnchor | null>(null);
+  const [seedHook, setSeedHook] = useState<BellaHook | null>(null);
+
+  // Bella's openers are built server-side; re-fetched when the user signs in or
+  // out, since a signed-in user with favorites gets personalized ones.
+  const { data: bellaHooks } = useBellaHooks(user?.id ?? session?.user?.id ?? null);
+
+  const openBella = (hook: BellaHook | null) => {
+    if (hook) setSeedHook(hook);
+    setChatOpen(true);
+  };
 
   const navState = location.state as {
     tab?: 'ingredients' | 'products';
@@ -128,8 +143,21 @@ const Index = () => {
           transition: 'transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
         }}
       >
-        <FaceModel />
+        <FaceModel onAnchorChange={setFaceAnchor} />
+
+        {/* Bella's invitation — anchored to the projected face, so it tracks the
+            model's position and zoom, and rides along when the graph shifts it */}
+        {!chatOpen && (
+          <BellaBubble
+            anchor={faceAnchor}
+            hooks={bellaHooks ?? []}
+            onOpen={openBella}
+          />
+        )}
       </div>
+
+      {/* Bella's chat panel (stays mounted so the conversation persists) */}
+      <BellaChat open={chatOpen} onClose={() => setChatOpen(false)} seedHook={seedHook} />
 
       {/* Graph Panel - slides in between model and ingredient list */}
       <div
