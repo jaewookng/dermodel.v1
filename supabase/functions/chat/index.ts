@@ -16,6 +16,8 @@
 //    the anon key is enough for the public sss_* reads, and the caller's own
 //    Authorization header is forwarded for the RLS-protected favorites read.)
 
+import { getPublishableKey, getSecretKey, isProjectApiKey } from "../_shared/keys.ts";
+
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 
@@ -56,7 +58,7 @@ Suggest consulting a professional for skin conditions.`;
 // --- Supabase REST helpers -------------------------------------------------
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const SUPABASE_ANON_KEY = getPublishableKey();
 
 // Query PostgREST. `authToken` is the bearer used for RLS — the anon key for
 // public sss_* reads, or the forwarded caller JWT for favorites.
@@ -310,6 +312,94 @@ async function callClaude(
 
 // --- Handler ---------------------------------------------------------------
 
+
+// ── Billing gate ────────────────────────────────────────────────────────────
+// Every turn must be authorised BEFORE we spend money at Anthropic. The gate
+// lives in `consume_chat_turn()` (20260824), which owns the plan lookup, the
+// lifetime/monthly conversation counters, the per-conversation turn cap and the
+// credit ledger — so this function never re-implements any of that policy.
+//
+// Anonymous callers have no user id, so they are counted against a salted hash
+// of their publishable key + client fingerprint. This is deliberately weak: an
+// anon user who clears state gets a fresh allowance, which is why the anon
+// allowance is small. Signed-in users are counted durably.
+
+const CHAT_ANON_SALT = Deno.env.get("CHAT_ANON_SALT") ?? "";
+
+async function anonKeyHash(req: Request): Promise<string> {
+  // Not a security control -- just a stable-ish bucket for rate limiting.
+  const fingerprint = [
+    req.headers.get("x-client-info") ?? "",
+    req.headers.get("user-agent") ?? "",
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "",
+  ].join("|");
+  const data = new TextEncoder().encode(`${CHAT_ANON_SALT}:${fingerprint}`);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+interface GateResult {
+  allowed: boolean;
+  plan: string | null;
+  conversation_id: string | null;
+  conversation_started: boolean;
+  turns_remaining_in_conversation: number | null;
+  conversations_remaining: number | null;
+  conversations_remaining_lifetime: number | null;
+  credits_remaining: number | null;
+  credit_usd_remaining: number | null;
+  reason: string | null;
+  usage_event_id: string | null;
+}
+
+/** Resolves the caller's user id from their JWT, or null when anonymous. */
+async function resolveUserId(userToken: string | null): Promise<string | null> {
+  if (!userToken) return null;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        apikey: getPublishableKey(),
+        Authorization: `Bearer ${userToken}`,
+      },
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return typeof body?.id === "string" ? body.id : null;
+  } catch {
+    return null;
+  }
+}
+
+async function consumeTurn(
+  userId: string | null,
+  anonHash: string | null,
+  conversationId: string | null,
+): Promise<GateResult | null> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/consume_chat_turn`, {
+    method: "POST",
+    headers: {
+      apikey: getSecretKey(),
+      Authorization: `Bearer ${getSecretKey()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      p_user_id: userId,
+      p_anon_key_hash: userId ? null : anonHash,
+      p_conversation_id: conversationId,
+      p_model: MODEL,
+      p_deep_dive: false,
+    }),
+  });
+  if (!res.ok) {
+    console.error("consume_chat_turn failed:", res.status, await res.text());
+    return null;
+  }
+  const rows = await res.json();
+  return Array.isArray(rows) ? (rows[0] ?? null) : rows;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -364,7 +454,40 @@ Deno.serve(async (req) => {
     const bearer = authHeader.toLowerCase().startsWith("bearer ")
       ? authHeader.slice(7).trim()
       : "";
-    const userToken = bearer && bearer !== SUPABASE_ANON_KEY ? bearer : null;
+    // Not just the publishable key: mid-migration a client may still be
+    // sending the legacy anon key, and mistaking that for a user JWT would
+    // forward it as one.
+    const userToken = bearer && !isProjectApiKey(bearer) ? bearer : null;
+
+    // ── Authorise this turn before spending anything at Anthropic ──────────
+    const rawConversationId = body?.conversation_id;
+    const conversationId = typeof rawConversationId === "string" && rawConversationId
+      ? rawConversationId
+      : null;
+
+    const userId = await resolveUserId(userToken);
+    const anonHash = userId ? null : await anonKeyHash(req);
+    const gate = await consumeTurn(userId, anonHash, conversationId);
+
+    if (!gate) {
+      // The gate itself failed. Fail CLOSED: an unmetered answer costs real
+      // money and silently breaks the allowance model.
+      return json({ error: "Chat is temporarily unavailable" }, 503);
+    }
+
+    if (!gate.allowed) {
+      // 402 with the full body, so the client can render the wall without a
+      // second fetch (docs/payment-model.md §12.5).
+      return json({
+        error: "limit_reached",
+        reason: gate.reason ?? "chat_not_available",
+        plan: gate.plan,
+        conversation_id: gate.conversation_id,
+        conversations_remaining_lifetime: gate.conversations_remaining_lifetime,
+        conversations_remaining: gate.conversations_remaining,
+        credit_usd_remaining: gate.credit_usd_remaining ?? 0,
+      }, 402);
+    }
 
     // Tool-use loop: keep calling Claude, executing any tool calls, and feeding
     // results back until it produces a plain-text answer (or we hit the cap).
@@ -429,7 +552,14 @@ Deno.serve(async (req) => {
         "Sorry, I couldn't come up with an answer. Could you try rephrasing your question?";
     }
 
-    return json({ reply });
+    return json({
+      reply,
+      conversation_id: gate.conversation_id,
+      turns_remaining_in_conversation: gate.turns_remaining_in_conversation,
+      conversations_remaining_lifetime: gate.conversations_remaining_lifetime,
+      conversations_remaining: gate.conversations_remaining,
+      credit_usd_remaining: gate.credit_usd_remaining ?? 0,
+    });
   } catch (err) {
     console.error("chat function error:", err);
     return json({ error: "Something went wrong handling the chat request" }, 500);

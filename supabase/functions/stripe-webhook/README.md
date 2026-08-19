@@ -12,10 +12,30 @@ than a Stripe API call on every chat message.
 | `customer.subscription.created` | Upserts `billing_subscriptions`. |
 | `customer.subscription.updated` | Upserts status, period bounds, and `cancel_at_period_end` (this is how `past_due` and downgrades arrive). |
 | `customer.subscription.deleted` | Upserts with `status = 'canceled'`. |
+| `invoice.paid` | Re-reads the subscription and upserts it, so `current_period_end` (the renewal date the Settings billing card shows) stays right across monthly, 6-month, and annual renewals. **No credits are granted here** — see below. |
 | `invoice.payment_failed` | Logged only — Stripe flips the subscription to `past_due` and sends a separate `.updated`. The hook exists so dunning email can be added here later. |
 
 Any other event type is acknowledged with `200` and ignored; returning non-2xx
 would make Stripe retry events that will never be processed.
+
+## Where the monthly $10 allowance comes from (not here)
+
+The Premium "$10 of Bella usage credits" allowance is **not** granted by this
+webhook. It is `billing_plans.monthly_credits` evaluated per **calendar month**
+inside `consume_chat_turn()`. Two reasons:
+
+1. **Interval-agnostic.** `invoice.paid` fires once per billing period, so a
+   grant-on-invoice design would hand a 6-month prepayer $10 every six months
+   and an annual subscriber $10 a year. The calendar-month derivation gives all
+   three intervals the same $10/month.
+2. **No dropped-webhook failure mode.** There is nothing to drop: a subscriber
+   whose webhook never arrived still has correct entitlement the moment
+   `billing_subscriptions` says `active`.
+
+`chat_credit_grants` remains for top-up purchases, promos, and support goodwill.
+It has a `stripe_invoice_id` column (unique, added in
+`20260821_billing_pricing_v2.sql`) so an operator can make a one-off grant
+against a specific invoice exactly once.
 
 ## Security
 
@@ -55,9 +75,12 @@ Three fallbacks, in order:
 3. The Stripe customer object's own `metadata.user_id`.
 
 Plan is resolved from the subscription's price id against
-`billing_plans.stripe_price_id_monthly` / `_yearly`, falling back to the
-checkout metadata, then to `plus`. Unattributable events are logged and skipped
-rather than written against a guessed user.
+`billing_plans.stripe_price_id_monthly` / `_semiannual` / `_yearly`, falling
+back to the checkout metadata, then to `premium`. All three intervals map to the
+same plan row — the interval changes the price, not the entitlement.
+
+Unattributable events are logged and skipped rather than written against a
+guessed user.
 
 ## Secrets / env
 
@@ -79,7 +102,7 @@ supabase functions deploy stripe-webhook --no-verify-jwt
 
 Then in the Stripe dashboard add an endpoint pointing at
 `https://<project-ref>.supabase.co/functions/v1/stripe-webhook`, subscribed to
-the five events in the table above, and copy its signing secret into
+the six events in the table above, and copy its signing secret into
 `STRIPE_WEBHOOK_SECRET`.
 
 Local testing:
@@ -89,4 +112,5 @@ stripe listen --forward-to http://localhost:54321/functions/v1/stripe-webhook
 stripe trigger checkout.session.completed
 ```
 
-Requires `supabase/migrations/20260818_billing.sql` to be applied first.
+Requires `supabase/migrations/20260818_billing.sql` and
+`supabase/migrations/20260821_billing_pricing_v2.sql` to be applied first.

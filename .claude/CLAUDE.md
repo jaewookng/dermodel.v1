@@ -12,6 +12,132 @@
 
 This document serves as the single source of truth for project status and development direction.
 
+### 💳 Stripe price ids are in the DATABASE, not in code
+`20260826_stripe_price_ids.sql` sets them on `billing_plans` where plan =
+'premium'; `create-checkout-session` reads them per request, so a price change
+is an `UPDATE`, never a redeploy.
+
+⚠️ **Stripe test and live mode are separate objects with different ids, and the
+id format is identical** — nothing in the code or schema can detect a mismatch.
+If `STRIPE_SECRET_KEY` is a live key while these ids are test-mode (or vice
+versa), checkout fails at runtime with "No such price". Re-run the UPDATE with
+live ids when you flip modes.
+
+---
+
+### 🚨 `REVOKE ... FROM anon, authenticated` DOES NOT LOCK A FUNCTION
+Postgres grants `EXECUTE` on every new function to **PUBLIC** by default, and
+both `anon` and `authenticated` inherit through it. Revoking only from those two
+roles leaves the function world-callable. 20260818/20260821/20260824 all did
+this, so 11 SECURITY DEFINER functions were reachable with nothing but the
+publishable key. **Confirmed live against production 2026-08-19** —
+`consume_chat_turn` started a conversation and consumed allowance,
+`billing_region_for_user` / `chat_identity_key` / `email_consent_state` all
+returned 200 to an anonymous caller.
+Worst were the writes: `set_billing_country` / `set_declared_country` (move
+another user's region and bypass or force region gating),
+`record_chat_usage_tokens` (falsify cost accounting), `consume_chat_turn` (burn
+a named user's allowance).
+**Fixed in `20260828_revoke_public_execute.sql`** — always
+`REVOKE ... FROM PUBLIC`, plus `ALTER DEFAULT PRIVILEGES ... REVOKE EXECUTE ON
+FUNCTIONS FROM PUBLIC` so it can't recur.
+
+⚠️ **Owner-rights views do not exempt function calls.** Postgres checks function
+EXECUTE against the *calling* user even inside a `security_invoker = false`
+view; owner-rights covers table access only. Locking everything down broke
+`my_chat_entitlement` with "permission denied for function chat_identity_key",
+so `authenticated` is re-granted EXECUTE on the five helpers that view calls
+(`chat_identity_key`, `dermodel_checkin_emails_allowed`,
+`billing_region_for_user`, `email_consent_state`, `billing_plan_for_user`).
+Those are reads and were world-callable before, so this is strictly an
+improvement — but narrowing them further means inlining their logic into the
+view.
+
+### 🚨 `grep "^ERROR"` NEVER MATCHES psql OUTPUT
+psql prefixes errors with `psql:/path/file.sql:LINE: ERROR:`, so a `^ERROR`
+filter matches nothing and every migration looks clean. This produced several
+false "✅ applies clean" claims in this session. Use `grep -iE "error"`.
+Also: a bare `auth.uid()` stub is not enough to test these migrations —
+20260824 needs an **`auth.users` table**, and without it the run dies partway
+and `consume_chat_turn` silently never gets created.
+
+### 💬 The chat gate (2026-08-19)
+`supabase/functions/chat/index.ts` now calls `consume_chat_turn()` **before**
+spending anything at Anthropic, and **fails closed** (503) if the gate itself
+errors — an unmetered answer costs real money. Returns 402 with the full body
+on refusal so the client renders the wall without a second fetch. Anonymous
+callers are bucketed by a salted SHA-256 of client hints (`CHAT_ANON_SALT`);
+this is deliberately weak, which is why the anon allowance is small.
+⚠️ Needs `supabase secrets set CHAT_ANON_SALT=...` before deploy.
+
+---
+
+### 🚨 LEAKED service_role KEY — legacy rotation is NO LONGER POSSIBLE
+The service-role key is in **public git history** on `origin/main`
+(`scripts/populate_papers.py` across 13 commits, `load_to_supabase.py` in one).
+Commit `a7ccc16` scrubbed the working tree but git keeps every blob. **Verified
+2026-08-19: the leaked key still authenticates** (read-only probe returned 200).
+
+Supabase **no longer supports rotating the legacy JWT secret / anon /
+service_role keys.** The only remediation is to migrate to the new API keys and
+then *disable* the legacy ones:
+
+1. Dashboard → Settings → API Keys → create `sb_publishable_…` + `sb_secret_…`
+2. Frontend: `VITE_SUPABASE_ANON_KEY` → the **publishable** key
+3. Python scripts: `export SUPABASE_SERVICE_KEY=<sb_secret_…>` (opaque to them,
+   no code change)
+4. Edge functions: already migrated — see `supabase/functions/_shared/keys.ts`
+5. **Disable legacy keys.** Until this step, the leaked key still works.
+
+⚠️ Also: `.claude/settings.local.json` holds a service_role key in an approved
+Bash command string. Untracked and globally gitignored, so it never reached
+GitHub, but scrub it after migrating.
+
+**This migration does NOT sign users out** — publishable/secret keys are not
+JWTs and don't touch the JWT secret; Supabase Auth is unchanged. (The separate
+*asymmetric JWT signing keys* migration is independent of this one.)
+
+### 🔑 Edge functions read keys through `_shared/keys.ts`
+New keys arrive as **JSON dictionaries** (`SUPABASE_SECRET_KEYS`,
+`SUPABASE_PUBLISHABLE_KEYS`) keyed by name — not bare strings — so
+`Deno.env.get("SUPABASE_SECRET_KEYS")` must be parsed and read by name
+(`default`). `getSecretKey()` / `getPublishableKey()` prefer the new keys and
+fall back to the legacy env vars, so functions work before AND after legacy is
+disabled. Delete the fallbacks once legacy is off.
+⚠️ `isProjectApiKey()` replaced `bearer !== SUPABASE_ANON_KEY` in `chat` and
+`bella-hooks`: mid-migration a client may still send the legacy anon key, and
+mistaking that for a user JWT would forward it as one.
+
+---
+
+### 🚨 `npx tsc --noEmit` CHECKS NOTHING IN THIS REPO
+`tsconfig.json` has `"files": []` and only project references, so a bare
+`npx tsc --noEmit` type-checks **zero files and exits 0**. It is a green light
+that means nothing, and it silently hid three real type errors (including a
+syntax error) that only surfaced on 2026-08-19.
+
+**Use `npm run typecheck`** (`tsc -b --force`, added 2026-08-19), or
+`npx tsc -p tsconfig.app.json --noEmit`. The script was verified to actually
+fail on a planted type error — a check that can't fail is worse than no check.
+Note `npm run build` (vite/esbuild) strips types without checking them, so it
+catches syntax errors but **not** type errors.
+
+### ⚠️ `SkinConcern` union does not match what the app stores
+`profiles.skin_concerns` is unconstrained `TEXT[]`, and the original migration
+documents `["acne","wrinkles","dryness"]`. The hand-written `SkinConcern` union
+in `types.ts` instead says `aging`/`dehydration`/`texture`/`pores`/`dullness`.
+`SkinProfile.tsx` offers the *migration's* vocabulary (`wrinkles`, `dryness`,
+`uneven-texture`), so the union has always been aspirational — `AuthContext`
+line ~203 already papers over it with `as SkinConcern[]`, and `SkinProfile` now
+does the same at its write boundary.
+**Nothing is broken at runtime** (the column takes any text, and live rows hold
+values valid under both lists). But the union is not a source of truth. Pick one
+vocabulary and reconcile before anything starts *reading* these values
+semantically — a recommender keying on `'aging'` would silently miss every user
+who selected `'wrinkles'`.
+
+---
+
 ### ⚠️ Migration naming: one migration per date
 Supabase derives a migration's **version** from the leading digits of the
 filename, and this repo names them `YYYYMMDD_slug.sql` — so the version is
@@ -30,17 +156,434 @@ This document outlines the steps to remove "Lovable" branding from your project 
 
 ---
 
+## 💳 PRICING v3: 12× markup, lifetime free tier, region policy (2026-08-24)
+
+**Status**: ✅ **DESIGN + SCHEMA + EDGE FUNCTIONS WRITTEN — nothing applied or deployed**
+
+Full reasoning in **`docs/payment-model.md`** (now v3). Three changes plus one
+new subsystem, all on top of the unapplied `20260821_billing_pricing_v2.sql`.
+
+- **Markup 11.12× → 12×.** Consumer prices do NOT move ($0.10/message, $10 =
+  100 messages). What tightens is the real-cost budget behind $0.10:
+  **$0.009 → $0.008333/turn**. Pre-Stripe margin at full consumption
+  **90.0% → 90.73%**. Post-Stripe monthly @100%: 84.5%.
+- **Free tier is 5 conversations PER LIFETIME**, not per month (12 turns each);
+  signed out drops to **2 conversations of 8 turns**. Free-tier cost becomes a
+  one-off ~$0.12–0.50 per account instead of a recurring monthly cost, so burn
+  now scales with **signups**, not user count. Break-even conversion falls from
+  **1.4% sustained to ≈0.13%** (typical) / 0.55% (worst case) against a
+  12-month subscriber life.
+- **Region policy** (`always_on` / `consent_first` / `avoid`) as **data** in
+  `billing_region_policy`, keyed by ISO country code. No country code appears
+  anywhere in app code.
+
+### ⚠️ Action Required
+```bash
+supabase db push                              # applies 20260824_billing_regions.sql
+supabase functions deploy create-checkout-session   # region gate
+supabase functions deploy stripe-webhook --no-verify-jwt
+```
+No new secrets. Re-run `20260824` after `20260823_bella_memory.sql` if that one
+lands later (it relaxes `profiles.checkin_emails_enabled`).
+
+### `supabase/migrations/20260824_billing_regions.sql` (NEW)
+- **`chat_lifetime_conversations`** — the durable counter. **No FK to
+  `profiles`**, keyed on a salted MD5 of the login email
+  (`chat_identity_key()`, salt in `chat_identity_salt`), so it survives sign-out,
+  localStorage clears, favorites deletion, **and account deletion + re-signup**.
+  ⚠️ Do NOT add a cascade or "tidy" it in an account-deletion routine — that
+  silently undoes the whole lifetime cap. Erasure requests are the one path that
+  deletes a row, and the allowance resets; that tradeoff is accepted.
+  `bonus_conversations` is the support escape hatch.
+- **`billing_region_policy`** — `country_code` PK, `policy`, `sell_premium`,
+  `marketing_default_opt_in`, `rationale`, `legal_review_status` (all seeded
+  **`'unreviewed'`** — ⚠️ **needs legal review before selling internationally**).
+  `'ZZ'` is the fallback row for unknown countries (seeded `consent_first`);
+  **do not delete it**, the resolver depends on it.
+- **`billing_user_region`** — `billing_country` (authoritative, from Stripe's
+  collected billing address) vs `declared_country` (weak: CDN geo header /
+  user-selected) vs `override_country` (operator). Precedence
+  `override > billing > declared > ZZ`. Disagreement rules: **an `avoid` from
+  either source blocks selling**; email default is the **AND** of both (ratchet
+  stricter); a later `always_on` never retroactively opts anyone in.
+- **`email_consent_events`** — append-only, RLS SELECT-own with no
+  INSERT/UPDATE/DELETE policy. `consent_text` stores **the exact wording shown**;
+  `policy_at_time` / `country_at_time` frozen so a policy edit can't rewrite
+  history. Written via `record_email_consent()` (stamps user/policy/country
+  server-side).
+- **`dermodel_checkin_emails_allowed(user_id)`** — precedence: withdrawn >
+  explicit off > explicit granted > region default.
+- `consume_chat_turn()` **dropped and recreated** (new OUT column
+  `conversations_remaining_lifetime`, new reason `lifetime_conversation_limit`).
+  Args unchanged. `my_chat_entitlement` and `billing_plans_public` recreated.
+- ⚠️ **Order-independent by design**: it re-declares the `20260821` surface with
+  `IF NOT EXISTS` / `ON CONFLICT DO NOTHING`. The duplication is deliberate —
+  don't "clean it up". Verified applying both with and without `20260821`.
+
+### ⚠️ `20260823_bella_memory.sql` needs a 2-line change (owner's file, NOT made here)
+It adds `profiles.checkin_emails_enabled BOOLEAN NOT NULL DEFAULT TRUE`, which
+is wrong for `consent_first` regions and cannot express "never asked".
+1. Change the column to plain `BOOLEAN` (no `NOT NULL`, no default) — `NULL`
+   means "never asked → use the region default".
+2. In `bella_checkin_candidates()`, replace `AND pr.checkin_emails_enabled`
+   with `AND dermodel_checkin_emails_allowed(c.user_id)`.
+`20260824` already relaxes the LIVE column (guarded: only nulls existing TRUEs
+while `email_consent_events` is empty), but a fresh DB would reintroduce
+`DEFAULT TRUE` without the source edit. See `docs/payment-model.md` §9.6.
+
+### Edge functions
+- **`create-checkout-session`**: resolves region server-side and returns
+  **403 `region_unavailable`** for `subscription`/`payment` when
+  `sell_premium` is false; **fails closed** if region can't be read.
+  `portal` mode is deliberately NOT gated (an existing subscriber must be able
+  to cancel). Adds `billing_address_collection: 'required'` +
+  `customer_update[address]=auto` so the webhook always has a country. Records
+  a geo-header/client hint as `declared_country` only — never `billing_country`.
+- **`stripe-webhook`**: writes the Stripe-collected country via
+  `set_billing_country()`, sets `billing_subscriptions.region_blocked` (new
+  column) if it resolves to `avoid`, and **withholds top-up credits** outright.
+  ⚠️ Does NOT auto-cancel — Stripe has no billing-country allowlist for
+  Checkout, so this is detect-and-remediate. Operator queue:
+  `billing_region_review`.
+
+### Verified (local Postgres 17, single rolled-back transaction, 2026-08-24)
+✅ `20260818`→`20260821`→`20260823`→`20260824` applies clean; also clean with
+`20260821` omitted ✅ lifetime gate: 5 conversations then
+`lifetime_conversation_limit`; anon 2 then the same ✅ turn 13 →
+`conversation_turn_limit` ✅ region: `ZZ`→consent_first, `US`→always_on
+(checkin on), `DE`→consent_first (checkin off → on after consent → off after
+withdrawal), `IR`→avoid, US-billing + RU-declared → avoid + `conflicted`,
+override → unblocks ✅ `my_chat_entitlement` under the `authenticated` role
+returns `upgrade_prompt='soft'`, `conversations_remaining_lifetime=1`
+✅ both edge functions parse. **Nothing written to any real database.**
+
+### ⚠️ Frontend contract
+`docs/payment-model.md` **§12 "Integration contract"** is the authoritative list
+of view/RPC/column names the UI codes against (owner is building it in
+parallel). **Do not rename anything listed in §12.7 without telling them.**
+`src/` was not modified by this pass.
+
+---
+
 ## 🤖 FEATURE: Bella — Grounded AI Assistant (2026-07-20, UI 2026-08-18)
 
 **Status**: ✅ **CODE COMPLETE — needs `db push` + 2 function deploys**
 
 ### ⚠️ Action Required
 ```bash
-supabase db push                             # includes 20260819_co_favorites.sql
-supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
-supabase functions deploy chat               # (already deployed as of 2026-08-18)
-supabase functions deploy bella-hooks        # NOT yet deployed
+supabase db push                             # 20260819_co_favorites + 20260820_feature_announcements
+supabase functions deploy bella-hooks        # re-deploy: adds `short` chip labels
 ```
+`chat` and `bella-hooks` are both deployed and returning live data as of
+2026-08-20. The `bella-hooks` re-deploy is only needed for the `short` chip
+labels — until then the chips fall back to truncating `text`, which reads
+noticeably worse ("Ethylhexylglyc…" instead of "Trending ingredient").
+
+⚠️ **Migration `20260818_billing.sql` is already applied** to the live DB (it
+went in alongside the co-favorites push). That is schema only — nothing calls
+`consume_chat_credits()` yet, so no limits are enforced and app behavior is
+unchanged. See `docs/payment-model.md`.
+
+---
+
+## 📦 FEATURE: Bella's Memory — Cabinet + Replenishment Check-ins (2026-08-20)
+
+**Status**: ✅ **CODE COMPLETE — needs `db push` + 2 function deploys**
+
+The recurring product. Premium members' cabinets are tracked, and Bella emails
+them when something is about to run out, asks a voluntary survey, and suggests
+alternatives. Free users keep favorites forever but get no check-ins.
+
+### Zero LLM, same posture as `bella-hooks`
+*When* to email is arithmetic; *what* to suggest is a few-hop traversal.
+```
+days_supply     = size_ml / (dose_ml × uses_per_day)
+estimated_empty = opened_on + days_supply      -- send within 7 days of it
+```
+
+### `supabase/migrations/20260823_bella_memory.sql` (NEW)
+- **`dermodel_parse_size_ml(text)`** — product names carry their size
+  ("…Ampoule, 1.01 fl oz/30 mL"), so items size themselves with no user input.
+  **Verified 535/600 = 89.2% parse rate, median 62.1 mL**, against real product
+  names in a throwaway Postgres 15 container. Prefers mL over oz (the oz figure
+  is the rounded marketing one); g treated 1 g = 1 mL; clamps out <1 and >5000
+  as parse artefacts ("Pack of 10", "1 Count"). Unparseable → NULL → item is
+  skipped, never guessed.
+- **`dermodel_dose_ml(text)`** — per-application dose by keyword. ⚠️ **Masks are
+  matched BEFORE serums/ampoules**: "Ampoule Mask" is one sheet, not an ampoule,
+  and the naive order overestimated its life by ~7×. Count-based products
+  (sheet masks, packs) are still modelled badly — `dose_ml` is user-editable.
+- **`cabinet_items`** + trigger filling size/dose from the product name, RLS
+  own-rows-only, `UNIQUE (user_id, product_id, opened_on)`.
+- **`my_cabinet`** — caller-scoped view computing the estimate **in SQL**, so
+  the app and the emails can never disagree about a date.
+- **`profiles.checkin_emails_enabled`** (default TRUE per product decision) and
+  **`profiles.email_token`** (unguessable unsubscribe handle).
+- **`bella_checkins`** with `UNIQUE (cabinet_item_id, cycle_key)` — the
+  idempotency guard — plus `checkin_survey_responses`.
+- **`bella_checkin_candidates(lead_days)`** — SECURITY DEFINER, REVOKEd from
+  anon/authenticated. The premium gate lives **here, not at the call site**, so
+  it can't be forgotten. Written `NOT IN ('free','anon')` rather than
+  `= 'premium'` so a plan rename can't silently switch everyone off (plus →
+  premium already happened once).
+
+### `supabase/functions/bella-checkin` (NEW) — daily cron
+**Claim-then-send**: the `bella_checkins` row is inserted *before* the email, so
+the unique constraint makes a retried or double-scheduled run lose the race
+rather than email someone twice; a failed send deletes the claim so the next run
+retries. `x-cron-secret` required (this endpoint sends real mail),
+`MAX_PER_RUN = 200`, and items >14 days past estimate are dropped (they stopped
+using it — that's not a reminder, it's nagging).
+
+### `supabase/functions/bella-survey` (NEW) — public, token-authorised
+Backs `/checkin/:token` and `/unsubscribe/:token`. Public by necessity (opened
+from an email with no session), so: validates the UUID shape before touching the
+DB, writes with the service role only after the token matches, and **returns the
+same response for a matched and unmatched unsubscribe token** so it can't be
+used to probe which tokens are real. Survey submit upserts on `checkin_id`, so a
+double submit edits rather than 409s.
+
+### Client
+- **`src/hooks/useCabinet.ts`** (NEW) + **`src/pages/Cabinet.tsx`** (`/cabinet`,
+  protected, linked from the header menu): add from favorites, set frequency,
+  remove. Shows "about 3 weeks left", never a precise date — it is an estimate.
+- **`src/pages/CheckIn.tsx`** / **`src/pages/Unsubscribe.tsx`** (NEW, public
+  routes). Unsubscribe fires **on mount, not behind a confirm button** — the
+  user is trying to leave, and a second click is how you get marked as spam.
+
+### ⚠️ What we CANNOT build yet
+`sss_products` has **no price and no first-seen date**. So "recently entered the
+market" and "got cheaper" referrals — both wanted — **are not computable**. The
+email ships "products that share what makes yours work" instead, which is honest
+against our data. Both need a retailer feed or price scrape first.
+
+### Verified (throwaway Postgres 15 + dev server, 2026-08-20)
+Migration applies clean and is idempotent (ran twice). End-to-end in SQL:
+✅ trigger auto-filled 30 mL / 0.7 mL from the name → 21-day supply
+✅ candidates returns **only** the premium user; free user excluded
+✅ `my_cabinet` scopes per user (each sees 1 row, not both)
+✅ logging a check-in drops candidates to 0; double-insert violates the unique
+constraint ✅ unsubscribe → 0 ✅ stale 120-day item → 0 ✅ brand-new item → 0
+✅ 15/21 days in → 1 ✅ lapsed subscription → 0 ✅ plan renamed to `premium` → 1,
+`anon` → 0
+✅ `/checkin/:token` and `/unsubscribe/:token` render and degrade gracefully on a
+bad token ✅ tsc + build clean
+⚠️ **Not verified**: the happy path through `bella-survey`/`bella-checkin`
+(neither is deployed) and no email has actually been sent through Resend.
+
+### ⚠️ Action Required
+```bash
+supabase db push                              # includes 20260823_bella_memory.sql
+supabase secrets set CHECKIN_CRON_SECRET=... APP_ORIGIN=https://dermodel.app
+supabase functions deploy bella-checkin
+supabase functions deploy bella-survey
+```
+Verify `dermodel.app` in Resend (sends from `bella@`, not `submissions@`), and
+schedule the cron — see the function README for the `pg_cron` snippet.
+
+---
+
+## 💳 Billing UI + AM/PM routines (2026-08-20)
+
+**Status**: ✅ **CODE COMPLETE — needs `db push`**
+
+Built against the locked integration contract in `docs/payment-model.md` §12.
+Those names are a contract: don't rename them on either side without telling
+the other.
+
+### `src/hooks/useEntitlement.ts` (NEW)
+One read of `my_chat_entitlement` (self-filtered by `auth.uid()`, zero rows when
+signed out, so `.maybeSingle()`). Exposes `isPremium`, `canBuy`
+(`sell_premium` — **false ⇒ render no purchase path at all**), `upgradePrompt`
+(`none|soft|hard`), `conversationsRemaining`, and `allowanceScope`.
+⚠️ **`allowanceScope === 'lifetime'` must never render as "this month".**
+
+### ⚠️ Consent must go through the RPC, never a column write
+`setCheckinConsent` calls `record_email_consent`, passing the **exact rendered
+label** (`CHECKIN_CONSENT_TEXT`) — it's stored verbatim as proof of what the
+user was shown, so changing the copy means bumping `CHECKIN_CONSENT_VERSION`.
+**Verified in Postgres**: in a `consent_first` region, setting
+`profiles.checkin_emails_enabled = TRUE` directly leaves
+`dermodel_checkin_emails_allowed()` returning FALSE — only the logged consent
+event flips it. A direct column write silently does nothing.
+
+### `src/components/SubscriptionStatus.tsx` (NEW, in Settings)
+Plan badge, allowance (credit dollars for Premium / conversations for Free),
+renewal or cancellation date, `past_due` warning, and the check-in consent
+checkbox. Renders **nothing** if the entitlement read fails, so the page is
+unharmed while the billing migrations are unapplied.
+Also: the Delete Account button was full-width solid red — an irreversible
+action styled as a primary CTA. Now small and outline-only.
+
+### AM/PM routines in the cabinet
+`20260823_bella_memory.sql` restructured (it is still unapplied, so this is a
+clean redefinition rather than a patch):
+- **`frequency` = how often, `routine` = when.** The old `'twice_daily'`
+  conflated the two; it's retired from the CHECK in favour of
+  `frequency='daily' + routine='both'`.
+- **`dermodel_routine_multiplier()`** — `'both'` = 2.0, else 1.0 — multiplied
+  into the rate in `my_cabinet` *and* `bella_checkin_candidates()`. Miss one and
+  the app and the emails disagree about the date.
+- `Cabinet.tsx` groups into **Morning / Evening**; a `'both'` product appears in
+  both sections, which is also why it halves the estimate.
+
+### ⚠️ Migration ordering: 20260823 now depends on 20260824
+`bella_checkin_candidates()` calls `dermodel_checkin_emails_allowed()`, which is
+defined in the **later** `20260824`. Postgres validates SQL function bodies at
+creation, so `20260823` ships a **fail-closed stub** (NULL ⇒ don't email),
+created only `IF NOT EXISTS`; `20260824` then `CREATE OR REPLACE`s it with the
+real region-aware version. Also `profiles.checkin_emails_enabled` is now plain
+nullable `BOOLEAN` — **`NOT NULL DEFAULT TRUE` silently opted in every
+consent_first user**, which is the exact thing consent law addresses.
+
+### Verified (Postgres 15 container, 2026-08-20)
+✅ Full chain `20260818 → 20260821 → 20260823 → 20260824` applies clean
+✅ stub is replaced by the real `plpgsql` version
+✅ consent gate: US never-asked → TRUE, DE never-asked → **FALSE**,
+DE after `record_email_consent` → TRUE, withdraw → FALSE, US opt-out → FALSE
+✅ routine math: daily+AM → 43 days, daily+both → 21, every_other_day+both → 43
+✅ retired `'twice_daily'` rejected by CHECK ✅ tsc + build clean
+⚠️ Not verified in-browser: Settings and Cabinet need a signed-in session
+against a DB with these migrations applied.
+
+---
+
+## 💳 Chat gate client protocol (2026-08-20)
+
+**Status**: ✅ **CODE COMPLETE — unblocks deploying the gated `chat` function**
+
+Built against `docs/payment-model.md` §12.5 / §8.1.
+
+- **`src/components/Bella/BellaLimit.tsx`** (NEW): what replaces the composer on
+  a refusal, rendered **entirely from the 402 body** — a second fetch would
+  flash an empty wall. Branches on `reason`:
+  `conversation_turn_limit` → "start a new conversation" (and it *says* the
+  count, because starting one permanently spends a free user's allowance);
+  `lifetime_conversation_limit` → the wall, which **sells memory, not messages**
+  and states plainly that saved products survive; `monthly_credit_limit` →
+  top-up; plus the remaining reasons.
+  ⚠️ The purchase CTA renders **only when `sell_premium`** — offering a button
+  the server will 403 is worse than offering none. Signed-out users get
+  **Sign in**, not checkout.
+- **`BellaChat`**: sends `conversation_id` (null on turn 1; the **server mints
+  it**, the client never generates or persists one) and clears it on
+  `conversation_turn_limit` or New chat. `close_my_chat_conversation` is
+  fire-and-forget — the server's idle timeout is the backstop, and blocking the
+  UI on it would be worse than a stale row.
+  ⚠️ supabase-js hides the 402 body on `error.context`; a naive `if (error)
+  throw` turns every limit into "something went wrong".
+  On refusal the optimistically-added user message is **rolled back**, so it
+  isn't left stranded above a wall.
+- **`src/hooks/useCheckout.ts`** (NEW): handles `403 region_unavailable`
+  distinctly from a generic failure — it is not retryable and the copy must not
+  suggest trying again.
+
+---
+
+## 🔮 Bella's twin orbs (2026-08-20)
+
+`src/components/Bella/BellaOrbs.tsx` (NEW) replaces the flat rose circle in the
+chat header with the **two spheres from the dermodel mark**.
+
+- **Palette sampled from the real asset**, not guessed: orb A
+  `#ef93d0 → #de8ad5 → #5091ea` (pink into periwinkle), orb B
+  `#b0ece3 → #67d2e0 → #79bddd` (pale mint into aqua). Owner chose the logo
+  palette as-is, which deliberately reintroduces cool tones into an otherwise
+  rose-only Bella UI.
+- **Pure CSS**, no asset: a radial-gradient specular highlight layered over a
+  linear-gradient body. Stays sharp at any size and downloads nothing.
+- **Motion only while `sending`** — at rest the orbs hold the logo pose. Depth
+  comes from scale + z-index + blur across an 8-stop orbit (4 stops traces a
+  diamond; 8 reads as a circle). `bella-orb-b` runs at `animation-delay: -1.2s`
+  on a 2.4s loop, i.e. exactly half a revolution behind.
+- Honours `prefers-reduced-motion`. `aria-hidden` — the "Bella" wordmark beside
+  it already carries the meaning.
+
+### Verified (dev server, 2026-08-20)
+✅ Rest pose matches the mark ✅ `getAnimations()` confirms both orbs running:
+A at `scale 1.131` front / B at `scale 0.869` back, exactly antiphase
+⚠️ At 24px the depth/lighting nuance is largely imperceptible — the chip was
+bumped to 26px, and the effect only really reads at 100px+. If the orbs ever
+deserve a hero moment, that's where the craft would show.
+
+### ⚠️ `public/favicon.ico` is a 1.4 MB PNG
+It is a **1102×1106 PNG mislabeled `.ico`**, and `Index.tsx` renders it into a
+32px slot — every visitor downloads 1.4 MB to draw a 32-pixel logo. Not fixed
+yet; wants a properly sized favicon set (16/32/180px) plus a small `<img>`
+source. Filed here so it isn't lost.
+
+---
+
+## 💬 Bella UI pass 2 (2026-08-20) — quiet at rest, prompt-first, announced
+
+**Status**: ✅ **CODE COMPLETE — verified live**
+
+### Bubble: ellipses at rest, expands on hover
+`BellaBubble` no longer auto-rotates hook text (that pulled the eye constantly).
+At rest it is **only the three dots**. Hover/focus expands it into **one hook
+drawn at random** from the bank; leaving collapses it back.
+- The dots and the text each sit in a `grid-cols-[0fr] → [1fr]` wrapper, which
+  is what makes the width animate smoothly rather than popping.
+- **Width is clamped to the room actually on screen**: the bubble hangs to the
+  *left* of the face and expands leftward, so a long hook ran off the viewport
+  when the model sits far left. `textMaxWidth` = available space ÷ `anchor.scale`
+  (the whole bubble is scaled), clamped to 130–240px. Found in the browser, not
+  in review — re-check it if `OFFSET_X` or the panel layout changes.
+- Click works without hover (touch): it draws a hook if none is showing.
+
+### Picking a hook loads the composer — it does NOT send
+Deliberate change from pass 1, which auto-sent the hidden prompt. Now clicking
+a hook (bubble or chip) calls `loadPrompt()`, which fills the composer and puts
+the caret at the end. **Nothing is asked on the user's behalf** — they see and
+can edit the prompt first. The `hidden`-message plumbing is therefore unused by
+hooks now, though `local`/`hidden` remain in `ChatMessage` and `toApiMessages()`.
+- `seedNonce` (bumped in `Index.openBella`) rather than hook id gates the
+  effect, so re-picking the *same* hook re-loads it.
+
+### Chip row: the whole bank, one tap away
+Horizontally scrollable chips above the composer, so nobody has to hover-cycle
+the bubble hunting for a prompt. Labels come from a new server-side `short`
+field on each hook (`bella-hooks`); `briefLabel()` truncates `text` as a
+fallback for hooks served by an older deploy. The row is `data-no-drag` so a
+sideways swipe scrolls it instead of dragging the panel.
+
+### Feature announcements — generic, reusable
+- **`supabase/migrations/20260820_feature_announcements.sql`** (NEW):
+  `profiles.features_seen TEXT[] NOT NULL DEFAULT '{}'`. One array column, not a
+  boolean per feature — every future announcement is a new **string key**, never
+  a new migration. Writes go through the existing "Users can update their own
+  profile" policy, so no new RLS.
+  ⚠️ Keys are permanent once shipped: renaming one re-shows the announcement to
+  everyone who had dismissed it.
+- **`src/hooks/useFeatureSeen.ts`** (NEW): `useFeatureSeen(key, userId)` →
+  `{ seen, markSeen }`. Signed in it reads/writes `profiles.features_seen` so the
+  dismissal follows the user across devices; signed out (and on any read error,
+  including the column not existing yet) it falls back to `localStorage`.
+  `seen` is `null` while resolving and callers must treat that as "don't show",
+  so the announcement can never flash for someone who already dismissed it.
+- **`src/components/Bella/BellaIntro.tsx`** (NEW): dims the page and spotlights
+  the resting bubble with "**Talk to Bella AI**" + "Got it". The spotlight is a
+  hole punched by a `0 0 0 9999px` ring shadow, and it **measures the real
+  bubble** via `[data-bella-bubble]` rather than recomputing its offsets, so it
+  can't drift out of sync (falling back to the anchor when the rect is 0×0).
+  Dismissed by Got it, Escape, or backdrop click — all call `markSeen`.
+  Rendered at top level in `Index`, **not** inside the FaceModel container: that
+  container has a `transform`, which traps its children in a stacking context
+  below the later `z-10` panels, so the dim couldn't cover the right-hand list.
+
+### Verified (dev server, 2026-08-20, live `chat` + `bella-hooks`)
+✅ Intro dims page, spotlights the ellipses, "Got it" persists to localStorage
+and does **not** return on reload ✅ bubble is dots at rest, expands on hover
+with a different hook each time, and stays fully on screen after the width clamp
+✅ click → panel opens with that hook's prompt **in the composer, unsent**
+✅ chip click swaps the prompt (8 chips, scrollable) ✅ send → real grounded
+reply (Anua Heartleaf ingredient list) with **bold** rendered ✅ tsc + build clean
+⚠️ Chip labels currently show the `briefLabel()` truncation because the deployed
+`bella-hooks` predates `short` — redeploy to fix.
+⚠️ Still not verified: the **projected** anchor path. The in-app browser reports
+`document.hidden = true`, so every emit takes the viewport fallback (32%×44%).
+Check on a real page load that the bubble tracks the face, and retune
+`REFERENCE_FACE_SPAN_PX`.
 
 ### Bella's opening hooks (2026-08-18) — server-side, ZERO LLM
 The assistant is named **Bella** and is immediately useful before the user types

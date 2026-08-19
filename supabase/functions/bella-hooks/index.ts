@@ -13,6 +13,8 @@
 // Deploy: supabase functions deploy bella-hooks
 // Secrets: none (SUPABASE_URL / SUPABASE_ANON_KEY are auto-injected)
 
+import { getPublishableKey, isProjectApiKey } from "../_shared/keys.ts";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -26,13 +28,17 @@ const json = (body: unknown, status = 200) =>
   });
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const SUPABASE_ANON_KEY = getPublishableKey();
 
 const enc = encodeURIComponent;
 
 interface Hook {
   id: string;
+  /** The full clickbait line shown in the bubble on hover. */
   text: string;
+  /** Two-or-three-word label for the chip row above the composer. */
+  short: string;
+  /** Loaded into the composer when the user picks this hook. */
   prompt: string;
   kind: "browse" | "personal";
 }
@@ -86,6 +92,7 @@ const BROWSE_STATICS: Hook[] = [
   {
     id: "static-nighttime",
     text: "Looking for a new nighttime routine?",
+    short: "Nighttime routine",
     prompt:
       "Help me build a nighttime skincare routine. What kinds of products should it include, and what's popular for each step?",
     kind: "browse",
@@ -93,6 +100,7 @@ const BROWSE_STATICS: Hook[] = [
   {
     id: "static-safety",
     text: "Get a safety check before you put it on your skin ✨",
+    short: "Safety check",
     prompt:
       "I want to check a product before I use it. Ask me which product, then walk me through what's in it and anything I should know about those ingredients.",
     kind: "browse",
@@ -100,6 +108,7 @@ const BROWSE_STATICS: Hook[] = [
   {
     id: "static-cabinet",
     text: "Let's start building your skincare cabinet →",
+    short: "Start a cabinet",
     prompt:
       "I'm starting from scratch. What are the essential product types for a basic skincare cabinet, and what are popular options for each?",
     kind: "browse",
@@ -107,6 +116,7 @@ const BROWSE_STATICS: Hook[] = [
   {
     id: "static-favorites",
     text: "Heart your favorite products to get started!",
+    short: "How favorites work",
     prompt:
       "How do favorites work here, and what will you be able to tell me once I've saved a few products?",
     kind: "browse",
@@ -114,6 +124,7 @@ const BROWSE_STATICS: Hook[] = [
   {
     id: "static-sensitive",
     text: "Sensitive skin? Let's find what won't fight back.",
+    short: "Sensitive skin",
     prompt:
       "I have sensitive skin. What ingredients should I look out for, and which popular products tend to be gentle?",
     kind: "browse",
@@ -144,7 +155,10 @@ Deno.serve(async (req) => {
     const bearer = authHeader.toLowerCase().startsWith("bearer ")
       ? authHeader.slice(7).trim()
       : "";
-    const userToken = bearer && bearer !== SUPABASE_ANON_KEY ? bearer : null;
+    // Not just the publishable key: mid-migration a client may still be
+    // sending the legacy anon key, and mistaking that for a user JWT would
+    // forward it as one.
+    const userToken = bearer && !isProjectApiKey(bearer) ? bearer : null;
 
     const hooks: Hook[] = [];
 
@@ -227,6 +241,7 @@ Deno.serve(async (req) => {
         if (neighbours.length >= 3) {
           hooks.push({
             id: "personal-pairs-with",
+            short: "Pairs with saved",
             text: `I found ${neighbours.length} new products that would go well with ${seedShort}`,
             prompt:
               `I've saved ${seed.product_name}. What other products in the Dermodel database share its key ingredients and would go well with it?`,
@@ -266,6 +281,7 @@ Deno.serve(async (req) => {
             if (cleanPick) {
               hooks.push({
                 id: "personal-paraben-free",
+            short: "Paraben free",
                 text: `${
                   shortName(cleanPick.product_name)
                 } is like ${seedShort} — and it's paraben free`,
@@ -300,6 +316,7 @@ Deno.serve(async (req) => {
         if (coPick?.product_name) {
           hooks.push({
             id: "personal-co-favorite",
+            short: "Others also liked",
             text: `People who saved ${seedShort} also liked ${
               shortName(String(coPick.product_name))
             }`,
@@ -314,6 +331,7 @@ Deno.serve(async (req) => {
       hooks.push({
         id: "personal-routine-check",
         text: `Want me to check your saved products for overlaps?`,
+        short: "Check overlaps",
         prompt:
           "Look at my saved products and tell me which ingredients repeat across them, and whether anything in there is redundant or worth not layering together.",
         kind: "personal",
@@ -321,6 +339,7 @@ Deno.serve(async (req) => {
       hooks.push({
         id: "personal-whats-missing",
         text: "Here's what's missing from your cabinet",
+        short: "What's missing",
         prompt:
           "Based on my saved products, what kind of product am I missing from a complete routine?",
         kind: "personal",
@@ -338,6 +357,7 @@ Deno.serve(async (req) => {
       if (hotPick?.product_name) {
         hooks.push({
           id: "browse-hot-product",
+            short: "What's hot",
           text: `Here's what's hot: ${shortName(String(hotPick.product_name))} \u{1F525}`,
           prompt:
             `What's in ${hotPick.product_name}, and why do you think people are saving it?`,
@@ -345,6 +365,7 @@ Deno.serve(async (req) => {
         });
         hooks.push({
           id: "browse-others-using",
+            short: "Most saved",
           text: "See what everyone else is using →",
           prompt:
             "What are the most-saved products on Dermodel right now, and what do they have in common?",
@@ -361,6 +382,7 @@ Deno.serve(async (req) => {
       if (ingPick) {
         hooks.push({
           id: "browse-hot-ingredient",
+            short: "Trending ingredient",
           text: `${
             String(ingPick.ingredient_name)
           } is everywhere right now — want to know why?`,

@@ -7,8 +7,34 @@
 //   customer.subscription.created       -> upsert billing_subscriptions
 //   customer.subscription.updated       -> upsert (status / period / cancel_at)
 //   customer.subscription.deleted       -> mark canceled
+//   invoice.paid                        -> refresh the subscription mirror so
+//                                          current_period_end is right for all
+//                                          three billing intervals
 //   invoice.payment_failed              -> logged; Stripe moves the sub to
 //                                          past_due and sends .updated
+//
+// REGION VERIFICATION. create-checkout-session refuses to open a paid session
+// for a region whose billing_region_policy row says 'avoid', but that check can
+// only use what we know BEFORE checkout (a CDN geo header, or nothing at all).
+// The authoritative country is the billing address Stripe collects during
+// Checkout, which only exists here. So this function writes that country to
+// billing_user_region.billing_country and, if the region resolves to 'avoid',
+// sets billing_subscriptions.region_blocked for operator review.
+//
+// It deliberately does NOT auto-cancel. The customer has paid and the product
+// works; silently revoking access on a webhook is a worse failure than a flag
+// a human refunds and cancels. Query billing_region_review for the queue.
+//
+// NOTE ON THE MONTHLY CREDIT GRANT: the $10/mo Bella allowance is NOT granted
+// here. It comes from billing_plans.monthly_credits evaluated per CALENDAR
+// MONTH inside consume_chat_turn(). That is deliberate:
+//   * it is interval-agnostic -- a 6-month or 12-month prepay still gets $10
+//     each month, whereas "grant on invoice.paid" would grant $10 once every
+//     6 or 12 months;
+//   * a dropped or delayed webhook can never cost a paying customer their
+//     allowance, because there is nothing to drop.
+// chat_credit_grants stays for top-up purchases, promos, and support goodwill;
+// stripe_invoice_id is available there for one-off idempotent operator grants.
 //
 // Everything else is acknowledged with 200 and ignored -- returning non-2xx
 // would make Stripe retry events we will never process.
@@ -20,13 +46,15 @@
 // Secrets: supabase secrets set STRIPE_SECRET_KEY=sk_live_...
 //          supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_...
 
+import { getSecretKey } from "../_shared/keys.ts";
+
 const TOLERANCE_SECONDS = 300; // reject deliveries older than 5 minutes
 
 // No CORS headers: this endpoint is server-to-server only and must never be
 // callable from a browser page.
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const SERVICE_ROLE_KEY = getSecretKey();
 
 // --- Signature verification -------------------------------------------------
 // Stripe-Signature: t=<unix ts>,v1=<hex hmac-sha256 of "<t>.<raw body>">
@@ -147,6 +175,87 @@ async function stripeGet(
   return body as Record<string, unknown>;
 }
 
+// --- Region verification ----------------------------------------------------
+
+async function rpc(fn: string, args: Record<string, unknown>): Promise<unknown> {
+  return await rest(`rpc/${fn}`, { method: "POST", body: JSON.stringify(args) });
+}
+
+type Region = {
+  country: string | null;
+  policy: string;
+  sell_premium: boolean;
+};
+
+// Pull the billing country out of whichever Stripe object we have. Checkout
+// Sessions carry it on customer_details.address; Customers on address.
+function countryFrom(obj: Record<string, unknown> | undefined): string | null {
+  if (!obj) return null;
+  const details = obj.customer_details as Record<string, unknown> | undefined;
+  const addr = (details?.address ?? obj.address) as
+    | Record<string, unknown>
+    | undefined;
+  const country = addr?.country;
+  return typeof country === "string" && /^[A-Za-z]{2}$/.test(country)
+    ? country.toUpperCase()
+    : null;
+}
+
+// Record the authoritative country and return the resolved region. Best
+// effort: a region write must never break the subscription mirror, because a
+// wrong entitlement is a worse outcome than a late region flag.
+async function verifyRegion(
+  userId: string,
+  country: string | null,
+): Promise<Region | null> {
+  try {
+    if (country) {
+      await rpc("set_billing_country", {
+        p_user_id: userId,
+        p_country: country,
+        p_source: "stripe_checkout",
+      });
+    }
+    const rows = (await rpc("billing_region_for_user", { p_user_id: userId })) as
+      | Region[]
+      | null;
+    return Array.isArray(rows) ? rows[0] ?? null : null;
+  } catch (err) {
+    console.error("Region verification failed for", userId, err);
+    return null;
+  }
+}
+
+async function flagRegionBlocked(
+  stripeSubscriptionId: string,
+  region: Region,
+): Promise<void> {
+  console.error(
+    "REGION BLOCK: paid subscription from an 'avoid' region:",
+    stripeSubscriptionId,
+    region.country,
+  );
+  try {
+    await rest(
+      `billing_subscriptions?stripe_subscription_id=eq.${
+        encodeURIComponent(stripeSubscriptionId)
+      }`,
+      {
+        method: "PATCH",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          region_blocked: true,
+          region_blocked_reason:
+            `billing country ${region.country ?? "unknown"} resolves to ` +
+            `policy '${region.policy}'; refund and cancel manually`,
+        }),
+      },
+    );
+  } catch (err) {
+    console.error("Could not flag region_blocked:", stripeSubscriptionId, err);
+  }
+}
+
 // --- Event handling ---------------------------------------------------------
 
 const toIso = (seconds: unknown): string | null =>
@@ -179,7 +288,9 @@ async function resolveUserId(
 }
 
 // Map a Stripe price id back to one of our plans; falls back to the metadata
-// stamped at checkout, then to 'plus' (the only paid plan today).
+// stamped at checkout, then to 'premium' (the only paid plan today). All three
+// billing intervals (monthly / semiannual / yearly) map to the same plan row --
+// the interval changes the price, never the entitlement.
 async function resolvePlan(
   metadata: Record<string, unknown> | undefined,
   priceId: string | null,
@@ -187,13 +298,14 @@ async function resolvePlan(
   if (priceId) {
     const rows = (await rest(
       `billing_plans?select=plan&or=(stripe_price_id_monthly.eq.${encodeURIComponent(priceId)},` +
+        `stripe_price_id_semiannual.eq.${encodeURIComponent(priceId)},` +
         `stripe_price_id_yearly.eq.${encodeURIComponent(priceId)})&limit=1`,
     )) as Array<Record<string, unknown>>;
     if (rows.length > 0 && typeof rows[0].plan === "string") return rows[0].plan;
   }
   const fromMetadata = metadata?.plan;
   if (typeof fromMetadata === "string" && fromMetadata) return fromMetadata;
-  return "plus";
+  return "premium";
 }
 
 async function upsertSubscription(
@@ -212,6 +324,20 @@ async function upsertSubscription(
       subscription.id,
     );
     return;
+  }
+
+  // Authoritative region check. The country comes from the Customer object
+  // (Checkout wrote it there via customer_update[address]=auto). Resolved
+  // BEFORE the upsert but FLAGGED after it -- on a first subscription the row
+  // does not exist yet, so a PATCH here would silently match nothing.
+  let region: Region | null = null;
+  if (customerId) {
+    try {
+      const customer = await stripeGet(apiKey, `customers/${customerId}`);
+      region = await verifyRegion(userId, countryFrom(customer));
+    } catch (err) {
+      console.error("Region check skipped for", subscription.id, err);
+    }
   }
 
   const items = subscription.items as Record<string, unknown> | undefined;
@@ -238,6 +364,10 @@ async function upsertSubscription(
       updated_at: new Date().toISOString(),
     }),
   });
+
+  if (region && !region.sell_premium && typeof subscription.id === "string") {
+    await flagRegionBlocked(subscription.id, region);
+  }
 }
 
 async function handleCheckoutCompleted(
@@ -267,6 +397,13 @@ async function handleCheckoutCompleted(
     });
   }
 
+  // Record the collected billing address country regardless of mode. For the
+  // subscription path upsertSubscription re-checks and flags; for a one-off
+  // top-up there is no subscription row to flag, so the block is logged and the
+  // grant is refused outright -- a top-up is a fresh purchase decision and
+  // there is no paid-access-in-flight to protect.
+  const checkoutRegion = await verifyRegion(userId, countryFrom(session));
+
   if (session.mode === "subscription" && typeof session.subscription === "string") {
     const subscription = await stripeGet(
       apiKey,
@@ -277,6 +414,14 @@ async function handleCheckoutCompleted(
   }
 
   if (session.mode === "payment" && session.payment_status === "paid") {
+    if (checkoutRegion && !checkoutRegion.sell_premium) {
+      console.error(
+        "REGION BLOCK: top-up paid from an 'avoid' region; credits withheld:",
+        session.id,
+        checkoutRegion.country,
+      );
+      return;
+    }
     const credits = Number(metadata?.grant_credits ?? 0);
     if (!Number.isFinite(credits) || credits <= 0) return;
     const paymentIntentId =
@@ -366,6 +511,23 @@ Deno.serve(async (req) => {
       case "customer.subscription.deleted":
         await upsertSubscription(apiKey, object, "canceled");
         break;
+
+      case "invoice.paid": {
+        // Renewals (and the first prepay invoice) move current_period_end.
+        // Re-reading the subscription keeps the mirror -- and therefore the
+        // renewal date the Settings billing card shows -- accurate for
+        // monthly, 6-month, and annual subscribers alike. No credits are
+        // granted here; see the note at the top of this file.
+        const subscriptionId = object.subscription;
+        if (typeof subscriptionId === "string" && subscriptionId) {
+          const subscription = await stripeGet(
+            apiKey,
+            `subscriptions/${subscriptionId}`,
+          );
+          await upsertSubscription(apiKey, subscription);
+        }
+        break;
+      }
 
       case "invoice.payment_failed":
         // Stripe flips the subscription to past_due and sends a separate

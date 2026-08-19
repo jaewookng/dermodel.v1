@@ -5,7 +5,10 @@ import { OptimizedIngredientDatabase } from '@/components/OptimizedIngredientDat
 import { GraphPanel } from '@/components/GraphPanel';
 import { BellaBubble } from '@/components/Bella/BellaBubble';
 import { BellaChat } from '@/components/Bella/BellaChat';
+import { BellaIntro } from '@/components/Bella/BellaIntro';
 import { useBellaHooks, type BellaHook } from '@/hooks/useBellaHooks';
+import { useFeatureSeen } from '@/hooks/useFeatureSeen';
+import { useCheckout } from '@/hooks/useCheckout';
 import type { GraphTarget } from '@/hooks/useGraphData';
 import { useAuth } from '@/contexts/AuthContext';
 import { LoginDialog } from '@/components/Auth/LoginDialog';
@@ -17,7 +20,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { LogIn, LogOut, Settings, Heart, User } from 'lucide-react';
+import { LogIn, LogOut, Settings, Heart, User, PackageCheck } from 'lucide-react';
 import { toast } from 'sonner';
 
 const Index = () => {
@@ -30,15 +33,30 @@ const Index = () => {
   const [chatOpen, setChatOpen] = useState(false);
   const [faceAnchor, setFaceAnchor] = useState<FaceAnchor | null>(null);
   const [seedHook, setSeedHook] = useState<BellaHook | null>(null);
+  const [seedNonce, setSeedNonce] = useState(0);
+
+  const bellaUserId = user?.id ?? session?.user?.id ?? null;
+  const { start: startCheckout } = useCheckout();
 
   // Bella's openers are built server-side; re-fetched when the user signs in or
   // out, since a signed-in user with favorites gets personalized ones.
-  const { data: bellaHooks } = useBellaHooks(user?.id ?? session?.user?.id ?? null);
+  const { data: bellaHooks } = useBellaHooks(bellaUserId);
+  const { seen: bellaIntroSeen, markSeen: markBellaIntroSeen } = useFeatureSeen(
+    'bella_intro',
+    bellaUserId
+  );
 
   const openBella = (hook: BellaHook | null) => {
-    if (hook) setSeedHook(hook);
+    if (hook) {
+      setSeedHook(hook);
+      setSeedNonce((n) => n + 1);
+    }
     setChatOpen(true);
   };
+
+  // `seen === null` means we're still resolving it — hold off so the intro can
+  // never flash for someone who already dismissed it.
+  const showBellaIntro = bellaIntroSeen === false && !chatOpen && !!faceAnchor;
 
   const navState = location.state as {
     tab?: 'ingredients' | 'products';
@@ -102,6 +120,10 @@ const Index = () => {
                     <Heart className="mr-2 h-4 w-4" />
                     <span>Favorites</span>
                   </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => navigate('/cabinet')}>
+                    <PackageCheck className="mr-2 h-4 w-4" />
+                    <span>My Cabinet</span>
+                  </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => navigate('/skin-profile')}>
                     <User className="mr-2 h-4 w-4" />
                     <span>Skin Profile</span>
@@ -152,12 +174,26 @@ const Index = () => {
             anchor={faceAnchor}
             hooks={bellaHooks ?? []}
             onOpen={openBella}
+            frozen={showBellaIntro}
           />
         )}
       </div>
 
       {/* Bella's chat panel (stays mounted so the conversation persists) */}
-      <BellaChat open={chatOpen} onClose={() => setChatOpen(false)} seedHook={seedHook} />
+      <BellaChat
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        seedHook={seedHook}
+        seedNonce={seedNonce}
+        hooks={bellaHooks ?? []}
+        onUpgrade={() => startCheckout('subscription')}
+        onSignIn={() => setLoginOpen(true)}
+      />
+
+      {/* One-time feature introduction, dimming the page around the bubble */}
+      {showBellaIntro && (
+        <BellaIntro anchor={faceAnchor} onDismiss={markBellaIntroSeen} />
+      )}
 
       {/* Graph Panel - slides in between model and ingredient list */}
       <div

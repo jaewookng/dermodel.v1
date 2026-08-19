@@ -14,6 +14,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Loader2, ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
+import type { SkinConcern } from '@/integrations/supabase/types'
 
 const SKIN_TYPES = ['dry', 'oily', 'combination', 'sensitive', 'normal']
 
@@ -58,7 +59,10 @@ export const SkinProfile = () => {
       setSaved(false)
       const updates: Parameters<typeof updateProfile>[0] = {
         skin_type: skinType || null,
-        skin_concerns: skinConcerns,
+        // The column is unconstrained TEXT[]; the SkinConcern union in types.ts
+        // does not match the vocabulary this page actually offers (see the note
+        // in CLAUDE.md). Cast here as AuthContext already does internally.
+        skin_concerns: skinConcerns as SkinConcern[],
       }
       await updateProfile(updates)
       toast.success('Skin profile updated')

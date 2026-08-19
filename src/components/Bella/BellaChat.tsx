@@ -2,6 +2,9 @@ import { useState, useRef, useEffect, useCallback, FormEvent, PointerEvent } fro
 import { supabase } from '@/integrations/supabase/client';
 import { X, ArrowUp } from 'lucide-react';
 import type { BellaHook } from '@/hooks/useBellaHooks';
+import { BellaOrbs } from '@/components/Bella/BellaOrbs';
+import { BellaLimit, type ChatLimit } from '@/components/Bella/BellaLimit';
+import { useEntitlement } from '@/hooks/useEntitlement';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -29,6 +32,15 @@ const toApiMessages = (messages: ChatMessage[]) => {
   return firstUser === -1
     ? []
     : sendable.slice(firstUser).map(({ role, content }) => ({ role, content }));
+};
+
+/**
+ * Chip label fallback for hooks served before `short` existed: first clause,
+ * trimmed to something that fits on a chip.
+ */
+const briefLabel = (text: string) => {
+  const clause = text.split(/[:?—]|\.\s/)[0].trim();
+  return clause.length <= 24 ? clause : `${clause.slice(0, 22).trimEnd()}…`;
 };
 
 /** Reveals text a few characters at a time — only for the newest reply. */
@@ -83,8 +95,16 @@ const AssistantMessage = ({ text, animate }: { text: string; animate: boolean })
 interface BellaChatProps {
   open: boolean;
   onClose: () => void;
-  /** A hook the user clicked — seeds the conversation and auto-asks. */
+  /** A hook the user clicked — loaded into the composer, not sent. */
   seedHook: BellaHook | null;
+  /** Bumped on every pick, so re-picking the same hook re-loads it. */
+  seedNonce: number;
+  /** The full hook bank, offered as chips above the composer. */
+  hooks: BellaHook[];
+  /** Opens the purchase flow. Only ever called when `sell_premium` is true. */
+  onUpgrade: () => void;
+  /** Opens the sign-in dialog, for signed-out users hitting the wall. */
+  onSignIn: () => void;
 }
 
 /**
@@ -92,13 +112,14 @@ interface BellaChatProps {
  * grabbing anywhere that isn't a control, and stays mounted so the conversation
  * survives closing and reopening.
  */
-export const BellaChat = ({ open, onClose, seedHook }: BellaChatProps) => {
+export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade, onSignIn }: BellaChatProps) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'assistant', content: GREETING, local: true },
   ]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [limit, setLimit] = useState<ChatLimit | null>(null);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
 
@@ -108,8 +129,13 @@ export const BellaChat = ({ open, onClose, seedHook }: BellaChatProps) => {
   const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
   // Only the latest assistant message types out; older ones render instantly.
   const animateFromIndex = useRef(0);
-  const lastSeedId = useRef<string | null>(null);
+  const lastSeedNonce = useRef(0);
   const sendingRef = useRef(false);
+  // Server-minted, never client-generated and never persisted (payment-model
+  // §8.1). Held in a ref so it can't go stale inside the send closure.
+  const conversationId = useRef<string | null>(null);
+
+  const { canBuy, entitlement } = useEntitlement();
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -126,7 +152,7 @@ export const BellaChat = ({ open, onClose, seedHook }: BellaChatProps) => {
 
   // --- Sending -------------------------------------------------------------
 
-  const sendConversation = useCallback(async (next: ChatMessage[]) => {
+  const sendConversation = useCallback(async (next: ChatMessage[], current: ChatMessage[] = []) => {
     if (sendingRef.current) return;
     sendingRef.current = true;
     setMessages(next);
@@ -135,11 +161,39 @@ export const BellaChat = ({ open, onClose, seedHook }: BellaChatProps) => {
 
     try {
       const { data, error: fnError } = await supabase.functions.invoke('chat', {
-        body: { messages: toApiMessages(next) },
+        body: {
+          messages: toApiMessages(next),
+          // null on the first turn; the server mints one and hands it back.
+          conversation_id: conversationId.current,
+        },
       });
-      if (fnError) throw fnError;
+
+      if (fnError) {
+        // A refusal is a 402 with a body we must render from directly — a second
+        // fetch would flash an empty wall. supabase-js hides the response on the
+        // error object, so dig it out before treating this as a failure.
+        const res = (fnError as { context?: Response }).context;
+        if (res && typeof res.json === 'function' && res.status === 402) {
+          const body = await res.json().catch(() => null);
+          if (body?.error === 'limit_reached') {
+            setLimit(body as ChatLimit);
+            // The turn was refused, so drop the user message we optimistically
+            // added rather than leaving it stranded above a wall.
+            setMessages(current);
+            if (body.reason === 'conversation_turn_limit') {
+              conversationId.current = null;
+            }
+            return;
+          }
+        }
+        throw fnError;
+      }
+
       const reply = typeof data?.reply === 'string' ? data.reply : null;
       if (!reply) throw new Error('Empty reply');
+      if (typeof data?.conversation_id === 'string') {
+        conversationId.current = data.conversation_id;
+      }
       animateFromIndex.current = next.length;
       setMessages([...next, { role: 'assistant', content: reply }]);
     } catch (err) {
@@ -157,22 +211,48 @@ export const BellaChat = ({ open, onClose, seedHook }: BellaChatProps) => {
     setInput('');
     setMessages((current) => {
       const next: ChatMessage[] = [...current, { role: 'user', content: text }];
-      void sendConversation(next);
+      void sendConversation(next, current);
       return next;
     });
   }, [input, sendConversation]);
 
-  // A clicked hook restarts the conversation: Bella says the hook line, and the
-  // prompt behind it goes to the model without cluttering the transcript.
+  // A picked hook loads its prompt into the composer, ready to send. We
+  // deliberately don't auto-send: the user should see and be able to edit what
+  // gets asked on their behalf before it goes anywhere.
+  const loadPrompt = useCallback((prompt: string) => {
+    setInput(prompt);
+    // Focus lands the caret at the end so it reads as an editable draft.
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(prompt.length, prompt.length);
+    });
+  }, []);
+
   useEffect(() => {
-    if (!seedHook || seedHook.id === lastSeedId.current) return;
-    lastSeedId.current = seedHook.id;
+    if (!seedHook || seedNonce === lastSeedNonce.current) return;
+    lastSeedNonce.current = seedNonce;
+    loadPrompt(seedHook.prompt);
+  }, [seedHook, seedNonce, loadPrompt]);
+
+  // Closing the conversation server-side is what makes the next turn start a
+  // fresh one. Fire-and-forget: if it fails the server's idle timeout still
+  // closes it, and blocking the UI on it would be worse than a stale row.
+  const startNewConversation = useCallback(() => {
+    const id = conversationId.current;
+    conversationId.current = null;
+    setLimit(null);
+    setMessages([{ role: 'assistant', content: GREETING, local: true }]);
     animateFromIndex.current = 0;
-    void sendConversation([
-      { role: 'assistant', content: seedHook.text, local: true },
-      { role: 'user', content: seedHook.prompt, hidden: true },
-    ]);
-  }, [seedHook, sendConversation]);
+    if (id) {
+      void supabase
+        .rpc('close_my_chat_conversation', { p_conversation_id: id })
+        .then(({ error }) => {
+          if (error) console.warn('Could not close conversation:', error.message);
+        });
+    }
+  }, []);
 
   // --- Dragging ------------------------------------------------------------
 
@@ -249,7 +329,7 @@ export const BellaChat = ({ open, onClose, seedHook }: BellaChatProps) => {
         {/* Header */}
         <div className="flex items-center justify-between border-b border-rose-100/80 bg-gradient-to-r from-rose-50/90 via-white/60 to-pink-50/80 px-4 py-2.5">
           <div className="flex items-center gap-2">
-            <span className="h-6 w-6 rounded-full bg-gradient-to-br from-rose-300 via-pink-300 to-rose-400 shadow-inner" />
+            <BellaOrbs size={26} active={sending} />
             <span className="text-sm font-semibold tracking-tight text-gray-800">Bella</span>
           </div>
           <button
@@ -303,6 +383,39 @@ export const BellaChat = ({ open, onClose, seedHook }: BellaChatProps) => {
           {error && <p className="px-1 text-xs text-rose-500">{error}</p>}
         </div>
 
+        {limit ? (
+          <BellaLimit
+            limit={limit}
+            canBuy={canBuy}
+            signedIn={!!entitlement}
+            onNewChat={startNewConversation}
+            onUpgrade={onUpgrade}
+            onSignIn={onSignIn}
+          />
+        ) : (
+        <>
+        {/* Hook chips — the whole bank, so nobody has to hover-cycle the bubble
+            to find the prompt they wanted. Scrolls horizontally; marked
+            data-no-drag so a sideways swipe scrolls instead of moving the panel. */}
+        {hooks.length > 0 && (
+          <div
+            data-no-drag
+            className="flex gap-1.5 overflow-x-auto border-t border-rose-100/80 bg-white/50 px-3 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
+            {hooks.map((h) => (
+              <button
+                key={h.id}
+                type="button"
+                onClick={() => loadPrompt(h.prompt)}
+                title={h.text}
+                className="shrink-0 whitespace-nowrap rounded-full border border-rose-200/80 bg-white/80 px-2.5 py-1 text-[11px] font-medium text-gray-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-gray-800"
+              >
+                {h.short ?? briefLabel(h.text)}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Composer */}
         <form
           onSubmit={(e: FormEvent) => {
@@ -336,6 +449,8 @@ export const BellaChat = ({ open, onClose, seedHook }: BellaChatProps) => {
             <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
           </button>
         </form>
+        </>
+        )}
       </div>
       </div>
     </div>

@@ -38,6 +38,7 @@ export type Database = {
           skin_type: SkinType[] | null
           skin_concerns: SkinConcern[] | null
           favorites_public: boolean
+          features_seen: string[]
           created_at: string
           updated_at: string
         }
@@ -50,6 +51,7 @@ export type Database = {
           skin_type?: SkinType[] | null
           skin_concerns?: SkinConcern[] | null
           favorites_public?: boolean
+          features_seen?: string[]
           created_at?: string
           updated_at?: string
         }
@@ -62,6 +64,49 @@ export type Database = {
           skin_type?: SkinType[] | null
           skin_concerns?: SkinConcern[] | null
           favorites_public?: boolean
+          features_seen?: string[]
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      cabinet_items: {
+        Row: {
+          id: string
+          user_id: string
+          product_id: string
+          opened_on: string
+          frequency: string
+          routine: string
+          size_ml: number | null
+          dose_ml: number | null
+          status: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          product_id: string
+          opened_on?: string
+          frequency?: string
+          routine?: string
+          size_ml?: number | null
+          dose_ml?: number | null
+          status?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          product_id?: string
+          opened_on?: string
+          frequency?: string
+          routine?: string
+          size_ml?: number | null
+          dose_ml?: number | null
+          status?: string
           created_at?: string
           updated_at?: string
         }
@@ -270,6 +315,64 @@ export type Database = {
       }
     }
     Views: {
+      my_chat_entitlement: {
+        Row: {
+          user_id: string | null
+          plan: string | null
+          display_name: string | null
+          metering_mode: string | null
+          conversation_allowance_scope: string | null
+          lifetime_conversations: number | null
+          conversations_used_lifetime: number | null
+          conversations_remaining_lifetime: number | null
+          bonus_conversations: number | null
+          monthly_conversations: number | null
+          conversations_used_this_month: number | null
+          conversations_remaining_this_month: number | null
+          conversation_turn_cap: number | null
+          monthly_credits: number | null
+          credit_allowance_usd: number | null
+          credits_used_this_month: number | null
+          bonus_credits: number | null
+          credits_remaining_this_month: number | null
+          credit_usd_remaining_this_month: number | null
+          allow_deep_dive: boolean | null
+          includes_cabinet_memory: boolean | null
+          includes_checkin_emails: boolean | null
+          includes_surveys: boolean | null
+          includes_referrals: boolean | null
+          region_policy: string | null
+          region_country: string | null
+          region_country_source: string | null
+          sell_premium: boolean | null
+          checkin_emails_effective: boolean | null
+          checkin_email_consent_required: boolean | null
+          checkin_email_consent_action: string | null
+          checkin_email_consent_at: string | null
+          upgrade_prompt: string | null
+          subscription_status: string | null
+          current_period_end: string | null
+          cancel_at_period_end: boolean | null
+        }
+        Relationships: []
+      }
+      my_cabinet: {
+        Row: {
+          id: string | null
+          product_id: string | null
+          product_name: string | null
+          image_url: string | null
+          opened_on: string | null
+          frequency: string | null
+          routine: string | null
+          size_ml: number | null
+          dose_ml: number | null
+          status: string | null
+          days_supply: number | null
+          estimated_empty_on: string | null
+        }
+        Relationships: []
+      }
       sss_ingredients_ranked: {
         Row: {
           ingredient_id: string | null
@@ -308,7 +411,33 @@ export type Database = {
       }
     }
     Functions: {
-      [_ in never]: never
+      record_email_consent: {
+        Args: {
+          p_action: string
+          p_method: string
+          p_consent_text?: string | null
+          p_consent_version?: string | null
+          p_channel?: string
+        }
+        Returns: string
+      }
+      set_my_declared_country: {
+        Args: { p_country: string; p_source?: string }
+        Returns: undefined
+      }
+      close_my_chat_conversation: {
+        Args: { p_conversation_id: string }
+        Returns: undefined
+      }
+      region_policy_for_country: {
+        Args: { p_country: string }
+        Returns: {
+          country_code: string
+          policy: string
+          sell_premium: boolean
+          marketing_default_opt_in: boolean
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never

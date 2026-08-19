@@ -7,8 +7,10 @@ one endpoint.
 ## What it does
 
 ```jsonc
-// Start / upgrade a subscription
-{ "mode": "subscription", "plan": "plus", "interval": "monthly" }
+// Start / upgrade a subscription. Three intervals:
+{ "mode": "subscription", "plan": "premium", "interval": "monthly" }    // $8.99/mo
+{ "mode": "subscription", "plan": "premium", "interval": "semiannual" } // $48.54 (10% off)
+{ "mode": "subscription", "plan": "premium", "interval": "yearly" }     // $91.68 (15% off)
 
 // Buy a one-time credit top-up pack
 { "mode": "payment" }
@@ -25,11 +27,18 @@ Stripe sends the user afterwards; it must be on `APP_ORIGIN` (anything else is
 ignored and replaced with `/settings`), so the parameter can't be used as an
 open redirect.
 
-- `mode` defaults to `"subscription"`, `plan` to `"plus"`, `interval` to
-  `"monthly"`.
+- `mode` defaults to `"subscription"`, `plan` to `"premium"`, `interval` to
+  `"monthly"`. `interval` also accepts the aliases `"annual"` → yearly and
+  `"6month"` / `"six_month"` → semiannual; anything unrecognised falls back to
+  monthly rather than erroring.
 - Stripe price ids are read from **`billing_plans`**
-  (`stripe_price_id_monthly` / `stripe_price_id_yearly`), not hardcoded — a
-  price change is an `UPDATE`, not a redeploy.
+  (`stripe_price_id_monthly` / `stripe_price_id_semiannual` /
+  `stripe_price_id_yearly`), not hardcoded — a price change is an `UPDATE`, not
+  a redeploy. The `_semiannual` pair is added by
+  `20260821_billing_pricing_v2.sql`.
+- All three intervals resolve to the same `premium` plan row: the interval
+  changes the price, never the entitlement. The chosen interval is stamped into
+  the subscription metadata for analytics.
 - Promotion codes are enabled on subscription checkouts.
 
 ## Auth
@@ -56,7 +65,8 @@ Subscription checkouts also stamp `subscription_data.metadata.user_id` and
 | --- | --- | --- |
 | `STRIPE_SECRET_KEY` | yes | Stripe API key (`sk_live_…` / `sk_test_…`) |
 | `APP_ORIGIN` | no | Allowed return origin; defaults to `https://dermodel.app` |
-| `STRIPE_TOPUP_PRICE_ID` | no | Price for the 100-credit pack; `mode: "payment"` is rejected without it |
+| `STRIPE_TOPUP_PRICE_ID` | no | Price for the credit top-up pack; `mode: "payment"` is rejected without it |
+| `STRIPE_TOPUP_CREDITS` | no | Credits granted by that pack, in milli-dollars of user-facing credit value. Defaults to `5000` (= "$5 more of Bella credits"). |
 | `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | auto | Injected by Supabase. Service role is needed to write `billing_customers`, which has no INSERT policy. |
 
 All read from `Deno.env` — never hardcoded.
@@ -67,9 +77,20 @@ All read from `Deno.env` — never hardcoded.
 supabase secrets set STRIPE_SECRET_KEY=sk_live_...
 supabase secrets set APP_ORIGIN=https://dermodel.app
 supabase secrets set STRIPE_TOPUP_PRICE_ID=price_...   # optional
+supabase secrets set STRIPE_TOPUP_CREDITS=5000         # optional, defaults to 5000
 supabase functions deploy create-checkout-session
 ```
 
-Requires `supabase/migrations/20260818_billing.sql` to be applied first
-(`billing_plans`, `billing_customers`), and the Stripe prices to exist with
-their ids written into `billing_plans`.
+Requires `supabase/migrations/20260818_billing.sql` **and**
+`supabase/migrations/20260821_billing_pricing_v2.sql` to be applied first
+(`billing_plans` with the `_semiannual` columns, `billing_customers`), and the
+three Stripe recurring prices to exist with their ids written into
+`billing_plans`:
+
+```sql
+UPDATE billing_plans SET
+  stripe_price_id_monthly    = 'price_...',   -- $8.99 / month
+  stripe_price_id_semiannual = 'price_...',   -- $48.54 / 6 months
+  stripe_price_id_yearly     = 'price_...'    -- $91.68 / year
+WHERE plan = 'premium';
+```

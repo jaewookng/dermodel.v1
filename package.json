@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "gcp-build": "npm run build",
-    "start": "serve -s dist -l $PORT"
+    "start": "serve -s dist -l $PORT",
+    "typecheck": "tsc -b --force"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

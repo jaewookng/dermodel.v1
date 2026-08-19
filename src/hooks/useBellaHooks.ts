@@ -3,7 +3,10 @@ import { supabase } from '@/integrations/supabase/client';
 
 export interface BellaHook {
   id: string;
+  /** Full clickbait line, shown in the bubble on hover. */
   text: string;
+  /** Brief label for the chip row. Older deploys may omit it. */
+  short?: string;
   /** Sent to the `chat` function when the user clicks this hook. */
   prompt: string;
   kind: 'browse' | 'personal';

@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Loader2, ArrowLeft } from 'lucide-react'
+import { SubscriptionStatus } from '@/components/SubscriptionStatus'
 import { toast } from 'sonner'
 
 export const Settings = () => {
@@ -79,6 +80,8 @@ export const Settings = () => {
         </div>
 
         {/* Profile Section */}
+        <SubscriptionStatus />
+
         <Card className="mb-6">
           <CardHeader>
             <CardTitle>Profile</CardTitle>
@@ -154,11 +157,15 @@ export const Settings = () => {
             <p className="text-sm text-red-600">Danger zone</p>
           </CardHeader>
           <CardContent>
+            {/* Small and outline-only on purpose: a full-width solid red button
+                gives a destructive, irreversible action the same visual weight
+                as a primary call to action. */}
             <Button
               onClick={handleDeleteAccount}
               disabled={deleting}
-              variant="destructive"
-              className="w-full"
+              variant="outline"
+              size="sm"
+              className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
             >
               {deleting ? (
                 <>

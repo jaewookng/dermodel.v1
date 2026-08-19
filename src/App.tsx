@@ -8,6 +8,9 @@ import Index from "./pages/Index";
 import { Settings } from "./pages/Settings";
 import { Favorites } from "./pages/Favorites";
 import SharedFavorites from "./pages/SharedFavorites";
+import { Cabinet } from "./pages/Cabinet";
+import { CheckIn } from "./pages/CheckIn";
+import { Unsubscribe } from "./pages/Unsubscribe";
 import { SkinProfile } from "./pages/SkinProfile";
 import { Support } from "./pages/Support";
 import NotFound from "./pages/NotFound";
@@ -66,7 +69,18 @@ const App = () => (
             />
             {/* Public shared-favorites profile — intentionally NOT protected.
                 :handle is a username, or a legacy user_id UUID. */}
+            <Route
+              path="/cabinet"
+              element={
+                <ProtectedRoute>
+                  <Cabinet />
+                </ProtectedRoute>
+              }
+            />
             <Route path="/u/:handle" element={<SharedFavorites />} />
+            {/* Reached from Bella's check-in emails — token-authorised, no login */}
+            <Route path="/checkin/:token" element={<CheckIn />} />
+            <Route path="/unsubscribe/:token" element={<Unsubscribe />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
