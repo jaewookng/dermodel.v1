@@ -61,6 +61,27 @@ Also: a bare `auth.uid()` stub is not enough to test these migrations —
 20260824 needs an **`auth.users` table**, and without it the run dies partway
 and `consume_chat_turn` silently never gets created.
 
+### 🔀 Chat model: DeepSeek via OpenRouter (2026-09-29)
+`supabase/functions/chat` no longer calls Anthropic. It calls OpenRouter's
+OpenAI-compatible `/chat/completions` with **`deepseek/deepseek-v4-flash`**
+(override with the `CHAT_MODEL` secret, no redeploy of code needed). Tool
+definitions, the tool loop and message shapes were converted to OpenAI format
+(`tool_calls` / `role: "tool"`); the four tools and the billing gate are
+unchanged. `provider.require_parameters` keeps routing on tool-capable
+providers; `provider.data_collection: "deny"` excludes providers that train on
+prompts.
+⚠️ **Needs** `supabase secrets set OPENROUTER_API_KEY=sk-or-...` then
+`supabase functions deploy chat`. Until then the DEPLOYED function is still the
+Anthropic one; after deploy, `ANTHROPIC_API_KEY` can be unset.
+⚠️ `billing_config.assumed_turn_cost_usd` (0.008333) and the margins in
+`docs/payment-model.md` were derived from Haiku pricing. DeepSeek is cheaper, so
+the estimate is now conservative (safe), not wrong — but `record_chat_usage_tokens`
+is still never called, so real cost is still not measured.
+Verified 2026-09-29: `deno check` clean; mocked round trip (tool call → Supabase →
+tool result → final reply, malformed args, upstream error) behaves; OpenRouter
+lists 15 tool-capable providers for the model. **Not verified against the live
+OpenRouter API** (no key in this environment).
+
 ### 💬 The chat gate (2026-08-19)
 `supabase/functions/chat/index.ts` now calls `consume_chat_turn()` **before**
 spending anything at Anthropic, and **fails closed** (503) if the gate itself

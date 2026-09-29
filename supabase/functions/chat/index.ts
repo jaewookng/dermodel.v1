@@ -1,6 +1,7 @@
 // Skincare chatbot for Dermodel, grounded in the app's own Supabase data via
-// Claude tool use. The model may ONLY state product/ingredient facts that come
-// back from a tool call — it never invents ingredient lists.
+// LLM tool use (DeepSeek, served through OpenRouter). The model may ONLY state
+// product/ingredient facts that come back from a tool call — it never invents
+// ingredient lists.
 //
 // Request:  POST { messages: [{ role: "user" | "assistant", content: string }] }
 // Response: JSON { reply: string }   (non-streaming — see note below)
@@ -11,19 +12,24 @@
 // later by switching the final assistant turn to SSE.
 //
 // Deploy:  supabase functions deploy chat
-// Secret:  supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+// Secret:  supabase secrets set OPENROUTER_API_KEY=sk-or-...
+//   Optional: CHAT_MODEL=<openrouter model id> overrides DEFAULT_MODEL without a
+//   code change (e.g. deepseek/deepseek-v4-pro for harder reasoning).
 //   (SUPABASE_URL and SUPABASE_ANON_KEY are auto-injected into edge functions;
 //    the anon key is enough for the public sss_* reads, and the caller's own
 //    Authorization header is forwarded for the RLS-protected favorites read.)
 
 import { getPublishableKey, getSecretKey, isProjectApiKey } from "../_shared/keys.ts";
 
-const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_VERSION = "2023-06-01";
+// OpenRouter exposes an OpenAI-compatible chat-completions API, so the request
+// and tool-call shapes below are OpenAI's, not Anthropic's.
+const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// Claude Haiku 4.5 — cheapest/fastest, good enough for grounded lookup + phrasing.
-// Upgrade to "claude-sonnet-5" for harder multi-step reasoning if needed.
-const MODEL = "claude-haiku-4-5";
+// DeepSeek V4 Flash — cheap and fast, supports tool calling; good enough for
+// grounded lookup + phrasing. Use the undated alias so OpenRouter keeps it
+// pointed at the current Flash build.
+const DEFAULT_MODEL = "deepseek/deepseek-v4-flash";
+const MODEL = Deno.env.get("CHAT_MODEL")?.trim() || DEFAULT_MODEL;
 
 const MAX_TOOL_ITERATIONS = 5;
 
@@ -83,9 +89,9 @@ async function restGet(
 
 const enc = encodeURIComponent;
 
-// --- Tool definitions (sent to Claude) -------------------------------------
+// --- Tool definitions (sent to the model) ----------------------------------
 
-const tools = [
+const toolSpecs = [
   {
     name: "search_ingredients",
     description:
@@ -146,6 +152,16 @@ const tools = [
     input_schema: { type: "object", properties: {} },
   },
 ];
+
+// OpenAI function-tool shape.
+const tools = toolSpecs.map((t) => ({
+  type: "function",
+  function: {
+    name: t.name,
+    description: t.description,
+    parameters: t.input_schema,
+  },
+}));
 
 // --- Tool handlers ---------------------------------------------------------
 
@@ -279,42 +295,64 @@ function clampLimit(raw: unknown, fallback: number, max: number): number {
   return Math.min(Math.floor(n), max);
 }
 
-// --- Anthropic Messages API call -------------------------------------------
+// --- OpenRouter chat-completions call --------------------------------------
 
-type AnthropicContentBlock = Record<string, unknown>;
+type ChatMessage = Record<string, unknown>;
 
-async function callClaude(
+interface ToolCall {
+  id: string;
+  type: string;
+  function: { name: string; arguments: string };
+}
+
+async function callModel(
   apiKey: string,
-  messages: Array<Record<string, unknown>>,
+  messages: ChatMessage[],
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(ANTHROPIC_API_URL, {
+  const res = await fetch(OPENROUTER_API_URL, {
     method: "POST",
     headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": ANTHROPIC_VERSION,
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
+      // Optional OpenRouter attribution headers (shown in their dashboard).
+      "HTTP-Referer": Deno.env.get("APP_ORIGIN") ?? "https://dermodel.app",
+      "X-Title": "Dermodel",
     },
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+      messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
       tools,
-      messages,
+      provider: {
+        // Only route to providers that actually support every parameter we
+        // send (i.e. tools) — otherwise OpenRouter may pick one that silently
+        // drops them and the model answers ungrounded.
+        require_parameters: true,
+        // Skip providers that retain or train on prompts; these are users'
+        // skincare questions.
+        data_collection: "deny",
+      },
     }),
   });
   if (!res.ok) {
     const body = await res.text();
-    console.error("Anthropic API error:", res.status, body);
-    throw new Error(`Anthropic API failed (${res.status})`);
+    console.error("OpenRouter API error:", res.status, body);
+    throw new Error(`OpenRouter API failed (${res.status})`);
   }
-  return await res.json();
+  const body = await res.json();
+  // OpenRouter can return 200 with an error object (e.g. upstream failure).
+  if (body?.error) {
+    console.error("OpenRouter upstream error:", JSON.stringify(body.error));
+    throw new Error("OpenRouter upstream error");
+  }
+  return body;
 }
 
 // --- Handler ---------------------------------------------------------------
 
 
 // ── Billing gate ────────────────────────────────────────────────────────────
-// Every turn must be authorised BEFORE we spend money at Anthropic. The gate
+// Every turn must be authorised BEFORE we spend money at the model provider. The gate
 // lives in `consume_chat_turn()` (20260824), which owns the plan lookup, the
 // lifetime/monthly conversation counters, the per-conversation turn cap and the
 // credit ledger — so this function never re-implements any of that policy.
@@ -412,9 +450,9 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    const apiKey = Deno.env.get("OPENROUTER_API_KEY");
     if (!apiKey) {
-      console.error("ANTHROPIC_API_KEY is not set");
+      console.error("OPENROUTER_API_KEY is not set");
       return json({ error: "Chat is not configured" }, 500);
     }
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
@@ -428,7 +466,7 @@ Deno.serve(async (req) => {
       return json({ error: "Request must include a non-empty messages array" }, 400);
     }
 
-    // Normalize the incoming conversation to the Anthropic shape. We accept the
+    // Normalize the incoming conversation to the chat-completions shape. We accept the
     // simple { role, content: string } form the client sends and keep only
     // user/assistant turns with string content.
     const messages: Array<Record<string, unknown>> = [];
@@ -459,7 +497,7 @@ Deno.serve(async (req) => {
     // forward it as one.
     const userToken = bearer && !isProjectApiKey(bearer) ? bearer : null;
 
-    // ── Authorise this turn before spending anything at Anthropic ──────────
+    // ── Authorise this turn before spending anything at the provider ───────
     const rawConversationId = body?.conversation_id;
     const conversationId = typeof rawConversationId === "string" && rawConversationId
       ? rawConversationId
@@ -489,56 +527,59 @@ Deno.serve(async (req) => {
       }, 402);
     }
 
-    // Tool-use loop: keep calling Claude, executing any tool calls, and feeding
-    // results back until it produces a plain-text answer (or we hit the cap).
+    // Tool-use loop: keep calling the model, executing any tool calls, and
+    // feeding results back until it produces a plain-text answer (or we hit
+    // the cap).
     let reply = "";
     for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
-      const response = await callClaude(apiKey, messages);
-      const contentBlocks = (response.content as AnthropicContentBlock[]) ?? [];
+      const response = await callModel(apiKey, messages);
+      const choice = (response.choices as Array<Record<string, unknown>>)?.[0];
+      const message = (choice?.message as Record<string, unknown>) ?? {};
+      const text = typeof message.content === "string"
+        ? message.content.trim()
+        : "";
+      const toolCalls = (message.tool_calls as ToolCall[] | undefined) ?? [];
 
-      // Collect any text the model produced this turn.
-      const text = contentBlocks
-        .filter((b) => b.type === "text")
-        .map((b) => String(b.text ?? ""))
-        .join("")
-        .trim();
-
-      if (response.stop_reason !== "tool_use") {
+      // Some providers report finish_reason "stop" alongside tool calls, so
+      // key off the presence of tool_calls rather than finish_reason alone.
+      if (toolCalls.length === 0) {
         reply = text;
         break;
       }
 
-      // Append the assistant turn (with its tool_use blocks) verbatim.
-      messages.push({ role: "assistant", content: contentBlocks });
+      // Append the assistant turn (with its tool_calls) verbatim.
+      messages.push({
+        role: "assistant",
+        content: message.content ?? null,
+        tool_calls: toolCalls,
+      });
 
-      // Execute each requested tool and gather the results.
-      const toolResults: AnthropicContentBlock[] = [];
-      for (const block of contentBlocks) {
-        if (block.type !== "tool_use") continue;
-        const toolName = String(block.name ?? "");
-        const toolInput = (block.input as Record<string, unknown>) ?? {};
+      // Execute each requested tool; every tool_call id needs a reply.
+      for (const call of toolCalls) {
+        const toolName = String(call.function?.name ?? "");
         let resultContent: string;
-        let isError = false;
         try {
-          const result = await runTool(toolName, toolInput, userToken);
+          // Arguments arrive as a JSON string and may be empty or malformed.
+          const rawArgs = call.function?.arguments;
+          const toolInput = rawArgs ? JSON.parse(rawArgs) : {};
+          const result = await runTool(
+            toolName,
+            toolInput && typeof toolInput === "object" ? toolInput : {},
+            userToken,
+          );
           resultContent = JSON.stringify(result);
         } catch (err) {
           console.error("Tool execution error:", toolName, err);
           resultContent = JSON.stringify({
             error: "Tool failed to run. Tell the user the lookup didn't work.",
           });
-          isError = true;
         }
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
           content: resultContent,
-          is_error: isError,
         });
       }
-
-      // Feed all tool results back in a single user turn and loop.
-      messages.push({ role: "user", content: toolResults });
 
       // If we're about to exceed the iteration cap, fall back to any text.
       if (iter === MAX_TOOL_ITERATIONS - 1) {
