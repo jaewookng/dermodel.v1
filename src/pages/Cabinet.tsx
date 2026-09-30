@@ -10,6 +10,7 @@ import {
   type CabinetRoutine,
   type CabinetItem,
 } from '@/hooks/useCabinet';
+import { RoutineSharing } from '@/components/Cabinet/RoutineSharing';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import {
@@ -184,6 +185,13 @@ export const Cabinet = () => {
               );
             })}
           </div>
+        )}
+
+        {/* What other public routines keep, plus share + invite links. Sits
+            below the routines so an empty cabinet still reads as the main
+            thing on the page. */}
+        {!loading && (
+          <RoutineSharing onAdd={handleAdd} adding={addItem.isPending} inCabinet={inCabinet} />
         )}
 
         {addable.length > 0 && (

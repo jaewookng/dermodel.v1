@@ -5,10 +5,12 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AnalyticsListener } from "@/components/AnalyticsListener";
+import { ReferralListener } from "@/components/ReferralListener";
 import Index from "./pages/Index";
 import { Settings } from "./pages/Settings";
 import { Favorites } from "./pages/Favorites";
 import SharedFavorites from "./pages/SharedFavorites";
+import SharedRoutine from "./pages/SharedRoutine";
 import { Cabinet } from "./pages/Cabinet";
 import { CheckIn } from "./pages/CheckIn";
 import { Unsubscribe } from "./pages/Unsubscribe";
@@ -35,6 +37,7 @@ const App = () => (
       <BrowserRouter>
         <AuthProvider>
           <AnalyticsListener />
+          <ReferralListener />
           <Routes>
             <Route path="/" element={<Index />} />
             <Route
@@ -80,6 +83,8 @@ const App = () => (
               }
             />
             <Route path="/u/:handle" element={<SharedFavorites />} />
+            {/* Public routine — opt-in via profiles.routine_public */}
+            <Route path="/r/:handle" element={<SharedRoutine />} />
             {/* Reached from Bella's check-in emails — token-authorised, no login */}
             <Route path="/checkin/:token" element={<CheckIn />} />
             <Route path="/unsubscribe/:token" element={<Unsubscribe />} />

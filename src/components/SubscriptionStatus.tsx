@@ -47,6 +47,10 @@ export const SubscriptionStatus = () => {
   if (unavailable || !entitlement) return null;
 
   const renews = formatDate(entitlement.current_period_end);
+  // A comp (referral week) is Premium with no Stripe object behind it: say
+  // when it ends, never "renews" — nothing will bill.
+  const isComp = entitlement.plan_source === 'comp';
+  const compEnds = formatDate(entitlement.comp_until);
   const consentRequired = entitlement.checkin_email_consent_required === true;
   const emailsOn = entitlement.checkin_emails_effective === true;
   const consentedAt = formatDate(entitlement.checkin_email_consent_at);
@@ -92,13 +96,17 @@ export const SubscriptionStatus = () => {
                 Your last payment didn't go through — update your card to keep Premium.
               </p>
             )}
-            {renews && (
+            {isComp && compEnds ? (
+              <p className="mt-1 text-xs text-gray-500">
+                Free Premium until {compEnds} — nothing to cancel, it just ends.
+              </p>
+            ) : renews ? (
               <p className="mt-1 text-xs text-gray-500">
                 {entitlement.cancel_at_period_end
                   ? `Ends ${renews}`
                   : `Renews ${renews}`}
               </p>
-            )}
+            ) : null}
           </div>
         ) : (
           <div>

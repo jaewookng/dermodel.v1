@@ -1283,6 +1283,8 @@ const { data } = await supabase
 | `subscription_status` | `text \| null` | `trialing`/`active`/`past_due` |
 | `current_period_end` | `timestamptz \| null` | renewal date |
 | `cancel_at_period_end` | `bool \| null` | |
+| `plan_source` | `text` | *(2026-09-15)* `'subscription'` \| `'comp'` \| `'none'`. A comp is Premium with no Stripe object (referral week, support goodwill) — **never render "Renews"** for one. |
+| `comp_until` | `timestamptz \| null` | When the live comp lapses back to free. |
 
 **Signed-out users get zero rows.** Use `billing_plans_public` +
 `region_policy_for_country()` for that case; the server enforces the anon

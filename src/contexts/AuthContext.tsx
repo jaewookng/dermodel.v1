@@ -15,7 +15,7 @@ interface AuthContextType {
   signUpWithEmail: (email: string, password: string, displayName?: string) => Promise<void>
   signOut: () => Promise<void>
   updateProfile: (
-    updates: Partial<Pick<ProfileRow, 'username' | 'avatar_url' | 'bio' | 'skin_concerns'>> & {
+    updates: Partial<Pick<ProfileRow, 'username' | 'avatar_url' | 'bio' | 'skin_concerns' | 'routine_public'>> & {
       skin_type?: string | string[] | null
     }
   ) => Promise<ProfileRow>
@@ -40,6 +40,8 @@ const getFallbackProfileFromSession = (session: Session | null): ProfileRow | nu
     skin_concerns: null,
     favorites_public: false,
     features_seen: [],
+    routine_public: false,
+    referral_code: '',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }
@@ -137,13 +139,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
       if (initializingRef.current) return
-      try {
-        await applySession(newSession)
-      } catch (error) {
-        console.error('Failed to apply auth state change:', error)
-      }
+      // Never await a Supabase call inside this callback. supabase-js invokes
+      // it while holding its auth lock (e.g. on TOKEN_REFRESHED), and any
+      // `.from()` query in here waits on getSession(), which needs that same
+      // lock -> the query never resolves, and every later query on the page
+      // hangs too (the "Submitting..." forever bug). Deferring to a macrotask
+      // lets the lock release first.
+      setTimeout(() => {
+        applySession(newSession).catch((error) => {
+          console.error('Failed to apply auth state change:', error)
+        })
+      }, 0)
     })
 
     return () => subscription?.unsubscribe()
@@ -199,6 +207,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (updates.username !== undefined) payload.username = updates.username
     if (updates.avatar_url !== undefined) payload.avatar_url = updates.avatar_url
     if (updates.bio !== undefined) payload.bio = updates.bio
+    if (updates.routine_public !== undefined) payload.routine_public = updates.routine_public
     if (updates.skin_concerns !== undefined) {
       payload.skin_concerns = updates.skin_concerns as SkinConcern[]
     }
