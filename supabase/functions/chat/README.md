@@ -37,6 +37,28 @@ isn't found.
 | `list_products_containing(ingredient_name, limit=15)` | Resolves the ingredient id, then lists products whose ingredient list includes it, ordered by product `like_count desc`. |
 | `get_user_favorites()` | The signed-in caller's favorited products. RLS-scoped — see below. Returns an empty list with a note when the request is unauthenticated. |
 
+## Bella's guidelines (the system prompt)
+
+Everything about how Bella talks lives in the `SYSTEM_PROMPT` constant near the
+top of `index.ts` — there is no other config. Edit it and redeploy.
+
+Current rules (2026-09-17):
+
+- **1–2 technical terms per answer**, chosen because they explain the mechanism
+  behind the question (humectant, occlusive, pKa…). Ingredient/INCI names don't
+  count. Each term is glossed once in plain words where it first appears;
+  everything around it stays simple. The goal is that the reader feels slightly
+  stretched and understands.
+- **Target persona**: already curious, reads ingredient lists, not a chemist.
+- **Cabinet-aware by default**: for a signed-in user the function reads
+  `my_cabinet` (20260823) with the caller's JWT before the first model call and
+  appends a "User's cabinet" section (product, product_id, AM/PM, frequency,
+  days of supply) to the system prompt. Bella is told to check that list first
+  for any product- or ingredient-specific question and answer in the context of
+  what the person already uses, calling `get_product` on a cabinet
+  `product_id` when it needs the actual ingredient list. Signed out, or if the
+  view is missing / the read fails, the section is simply absent.
+
 ## How favorites RLS is handled
 
 `product_favorites` is protected by RLS (each user sees only their own rows). The

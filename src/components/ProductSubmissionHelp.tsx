@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { supabase } from '@/integrations/supabase/client';
+import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations/supabase/config';
 import { useAuth } from '@/contexts/AuthContext';
 
 const isValidUrl = (value: string) => {
@@ -21,6 +22,51 @@ const isValidUrl = (value: string) => {
     return url.protocol === 'http:' || url.protocol === 'https:';
   } catch {
     return false;
+  }
+};
+
+const INSERT_TIMEOUT_MS = 15_000;
+
+// Insert straight into PostgREST with the token we already hold, instead of
+// through supabase.from(): the client's insert path first calls
+// auth.getSession(), which takes the auth lock, and if anything is holding
+// that lock (a stuck refresh, an awaited query inside onAuthStateChange) the
+// insert never resolves and the button sits on "Submitting..." forever.
+// This path has no lock and a hard timeout, so it always resolves.
+const insertSubmission = async (
+  row: { product_url: string; product_name: string | null; user_id: string | null },
+  accessToken: string | null,
+): Promise<void> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), INSERT_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/product_submissions`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_PUBLISHABLE_KEY,
+        Authorization: `Bearer ${accessToken ?? SUPABASE_PUBLISHABLE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify(row),
+      signal: controller.signal,
+    });
+    if (res.ok) return;
+    const body = await res.text().catch(() => '');
+    // Expired/invalid user token: the submission still matters more than the
+    // attribution, so retry once as an anonymous submission.
+    if ((res.status === 401 || res.status === 403) && accessToken) {
+      console.warn('Submission rejected with user token, retrying anonymously:', res.status, body);
+      return insertSubmission({ ...row, user_id: null }, null);
+    }
+    throw new Error(`Insert failed (${res.status}): ${body}`);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(`Insert timed out after ${INSERT_TIMEOUT_MS / 1000}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
 };
 
@@ -54,12 +100,16 @@ export const ProductSubmissionHelp = () => {
     setSubmitting(true);
     setError(null);
     try {
-      const { error: insertError } = await supabase.from('product_submissions').insert({
-        product_url: url,
-        product_name: productName.trim() || null,
-        user_id: session?.user?.id ?? null,
-      });
-      if (insertError) throw insertError;
+      const startedAt = performance.now();
+      await insertSubmission(
+        {
+          product_url: url,
+          product_name: productName.trim() || null,
+          user_id: session?.user?.id ?? null,
+        },
+        session?.access_token ?? null,
+      );
+      console.info(`Product submission stored in ${Math.round(performance.now() - startedAt)}ms`);
 
       // Best-effort admin email; the submission row above is the source of
       // truth, so a notification failure shouldn't fail the submission.
@@ -67,12 +117,19 @@ export const ProductSubmissionHelp = () => {
         .invoke('notify-product-submission', {
           body: { product_url: url, product_name: productName.trim() || null },
         })
-        .catch(() => {});
+        .then(({ error }) => {
+          if (error) console.warn('Submission email not sent:', error);
+        })
+        .catch((err) => console.warn('Submission email not sent:', err));
 
       setSubmitted(true);
     } catch (err) {
       console.error('Product submission failed:', err);
-      setError('Something went wrong submitting your product. Please try again.');
+      setError(
+        err instanceof Error && err.message.includes('timed out')
+          ? 'The submission timed out. Check your connection and try again.'
+          : 'Something went wrong submitting your product. Please try again.',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -84,7 +141,8 @@ export const ProductSubmissionHelp = () => {
         <TooltipTrigger asChild>
           <button
             type="button"
-            aria-label="How to submit a product"
+            aria-label="Submit a product"
+            onClick={() => setOpen(true)}
             className="text-gray-400 hover:text-violet-600 transition-colors"
           >
             <HelpCircle className="h-4 w-4" />

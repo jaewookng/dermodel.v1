@@ -156,6 +156,142 @@ This document outlines the steps to remove "Lovable" branding from your project 
 
 ---
 
+## 🐛 FIX: signed-in Supabase queries hung forever (2026-09-18)
+
+**Symptom**: product submission stuck on "Submitting..." (and no admin email,
+because the insert never resolved so the notify call never ran). Only when
+signed in, typically after the tab had been open a while.
+
+**Cause**: `AuthContext` awaited `supabase.from('profiles')` **inside**
+`onAuthStateChange`. supabase-js runs that callback while holding its auth
+lock (on `TOKEN_REFRESHED` etc.); a query inside waits on `getSession()`,
+which needs the same lock → deadlock, and every later query on the page hangs
+too. This is the documented supabase-js footgun.
+
+**Fix (two layers)**:
+1. The `onAuthStateChange` callback defers `applySession` with
+   `setTimeout(…, 0)` so the lock releases first.
+2. **`ProductSubmissionHelp` no longer inserts through `supabase.from()` at
+   all.** `insertSubmission()` POSTs straight to PostgREST with the
+   `session.access_token` already held in React state — no `getSession()`,
+   no auth lock — with a 15 s `AbortController` timeout (surfaces a "timed
+   out" error instead of spinning forever) and a one-shot anonymous retry if
+   the user token is rejected (401/403), so the row still lands. Logs
+   `Product submission stored in Nms` on success. Verified signed-out in the
+   dev server (390 ms).
+⚠️ **Prod (dermodel.app) was still the 2026-09-15 build when the user
+reported "still no fix" — none of this is live until `npm run build` +
+`firebase deploy --only hosting`.** `dist/` rebuilt 2026-09-18. Also `ProductSubmissionHelp` logs a `console.warn` when
+the notify function errors instead of `.catch(() => {})`.
+⚠️ Not verified in-browser (needs OAuth + a token refresh to reproduce);
+`npm run typecheck` clean. If any other `onAuthStateChange` handler is added,
+same rule: never await a Supabase call inside it.
+
+---
+
+## 💬 Bella guidelines + cabinet awareness (2026-09-17)
+
+**Status**: ✅ **CODE COMPLETE — needs `supabase functions deploy chat`**
+
+- **Where the guidelines live**: the `SYSTEM_PROMPT` constant in
+  `supabase/functions/chat/index.ts` (documented in that function's README).
+  Nothing else configures Bella's voice; edit + redeploy.
+- **Science-communication rules** now in the prompt: 1–2 relevant technical
+  terms per answer (ingredient/INCI names excluded), each glossed once in plain
+  language, everything else simplified; the reader should feel slightly
+  stretched. Persona: curious, reads ingredient lists, not a chemist. Mechanism
+  over attribute lists.
+- **Cabinet is pre-loaded, not a tool.** `fetchCabinetContext()` reads
+  `my_cabinet` with the caller's JWT once per request (after the billing gate,
+  before the first model call) and appends a "User's cabinet" block to the
+  system prompt, so Bella sees it on turn one without deciding to ask. Any
+  failure (signed out, view unapplied, stale token) → no block, logged as a
+  warning. Only `status='active'` rows, capped at 40. `callClaude()` now takes
+  the assembled `system` string.
+- ⚠️ Cost: the cabinet block adds a few hundred tokens of input per turn for
+  users who have one. Fine at Haiku prices; revisit if the model moves up.
+- ⚠️ Not verified live: the cabinet path needs a signed-in session against a
+  DB with `20260823` applied. Syntax verified with esbuild (no local Deno).
+
+---
+
+## 🔗 Routine sharing + referrals (2026-09-15)
+
+**Status**: ✅ **CODE COMPLETE — needs `db push` (20260915)**
+
+Two growth loops off the cabinet (from `docs/gtm-fastest-entry.md` §3).
+
+### Public routines — `/r/<username>`
+- `profiles.routine_public` + `public_routines` view (owner-rights, joined on
+  the flag, same posture as `public_favorites`). Exposes product + AM/PM slot +
+  frequency only — **no sizes, no `opened_on`, no email**.
+- **Going public is what unlocks "From routines like yours"**:
+  `routine_recommendations(p_limit)` scores every product in *other* public
+  cabinets by overlap with the caller's and returns aggregate counts only
+  (`shared_by`, `overlap`), never who. **Gated server-side on the caller's own
+  `routine_public`** — the client toggle just mirrors it; while private the
+  RPC returns zero rows. Empty cabinet ⇒ overlap 0 for all ⇒ ordered by how
+  many people keep it. `routine_recommendations_count()` feeds the locked
+  state ("N people have made their routine public").
+- ⚠️ Written in `LANGUAGE sql`, not plpgsql: `RETURNS TABLE` column names
+  shadow joined columns in a plpgsql body and every reference becomes
+  "ambiguous".
+- `src/pages/SharedRoutine.tsx`, `src/components/Cabinet/RoutineSharing.tsx`,
+  `src/hooks/useRoutineSharing.ts`. The toggle goes through
+  `AuthContext.updateProfile` (widened to accept `routine_public`) so the
+  in-memory profile — where `isPublic` is read from — updates with the row.
+
+### Referrals — `/?ref=<code>`, a week of Premium for both
+- `profiles.referral_code` (10 hex, unique on `lower()`), `referrals`
+  (one row per referred account, ever), `billing_comp_grants`.
+- **`billing_plan_for_user()` now resolves `Stripe sub → live comp → free`.**
+  Same signature and grants, so `consume_chat_turn`,
+  `bella_checkin_candidates` and `my_chat_entitlement` all honour comps with
+  no change. A comp is **never a Stripe object** — it lapses, it never bills.
+- `claim_referral(p_code)` — SECURITY DEFINER, `authenticated` only, returns
+  a status (`granted | already_referred | invalid_code | self | too_old |
+  referrer_capped`) rather than raising. Guards: one referral per account;
+  claim window `referral_claim_window_days` (7) after `profiles.created_at`;
+  referrer cap `referral_max_per_30d` (10) — **the invitee still gets their
+  week when the referrer is capped**. Comps stack end-to-end (5 referrals =
+  5 weeks). Advisory lock per referrer so concurrent claims can't both slip
+  under the cap. All three tunables live in `billing_config`.
+- ⚠️ Cost ceiling: Premium credits are metered by calendar month, so a
+  one-week comp can spend the full $10 allowance (~$0.83 real). Bounded by
+  the cap at ~$8/referrer/month; OAuth-only signup makes farming expensive.
+- ⚠️ A paying subscriber's referral comp is recorded but moot while they pay
+  (the subscription wins); it takes over only if they cancel before it
+  lapses. Applying a Stripe coupon instead would be the better reward for
+  them — not built.
+- `src/components/ReferralListener.tsx` (in `App`): captures `?ref=` from any
+  route into `localStorage['dermodel:ref']`, claims once a session exists,
+  clears the key whatever the outcome (a `too_old`/`invalid_code` is not
+  retryable), toasts on `granted`/`referrer_capped`.
+- `my_chat_entitlement` gained two **trailing** columns (`plan_source`
+  `subscription|comp|none`, `comp_until`) via `CREATE OR REPLACE VIEW` —
+  trailing because OR REPLACE only allows appending. `SubscriptionStatus`
+  says "Free Premium until <date> — nothing to cancel" instead of "Renews".
+
+### Verified (Postgres 15 container, all 27 migrations from scratch, 2026-09-15)
+✅ full chain applies clean ✅ anon sees only public routines ✅ private user:
+0 recommendations, pool=1; after going public: the two non-overlapping
+products, overlap 1, own products excluded ✅ claim → both premium,
+`plan_source='comp'`, `comp_until` = +7d ✅ `already_referred`, `self`,
+`invalid_code`, `too_old` ✅ lapsed comp → `free` ✅ anon → permission denied
+on both RPCs ✅ comps stack (support 0–5d, referral 5–12d) ✅ cap=1: second
+claim `referrer_capped`, invitee premium, referrer comps stay 1
+✅ typecheck + build ✅ `/r/<handle>` degrades to the empty state while the
+view is unapplied; `?ref=` lands in localStorage.
+⚠️ Not verified in-browser: the signed-in cabinet UI (needs OAuth + the
+migration applied).
+
+### ⚠️ Action Required
+```bash
+supabase db push        # 20260915_routine_sharing_referrals.sql
+```
+
+---
+
 ## 💳 PRICING v3: 12× markup, lifetime free tier, region policy (2026-08-24)
 
 **Status**: ✅ **DESIGN + SCHEMA + EDGE FUNCTIONS WRITTEN — nothing applied or deployed**

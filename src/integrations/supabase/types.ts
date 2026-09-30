@@ -39,6 +39,8 @@ export type Database = {
           skin_concerns: SkinConcern[] | null
           favorites_public: boolean
           features_seen: string[]
+          routine_public: boolean
+          referral_code: string
           created_at: string
           updated_at: string
         }
@@ -52,6 +54,8 @@ export type Database = {
           skin_concerns?: SkinConcern[] | null
           favorites_public?: boolean
           features_seen?: string[]
+          routine_public?: boolean
+          referral_code?: string
           created_at?: string
           updated_at?: string
         }
@@ -65,6 +69,8 @@ export type Database = {
           skin_concerns?: SkinConcern[] | null
           favorites_public?: boolean
           features_seen?: string[]
+          routine_public?: boolean
+          referral_code?: string
           created_at?: string
           updated_at?: string
         }
@@ -352,6 +358,8 @@ export type Database = {
           upgrade_prompt: string | null
           subscription_status: string | null
           current_period_end: string | null
+          plan_source: string | null
+          comp_until: string | null
           cancel_at_period_end: boolean | null
         }
         Relationships: []
@@ -409,8 +417,42 @@ export type Database = {
         }
         Relationships: []
       }
+      public_routines: {
+        Row: {
+          user_id: string | null
+          username: string | null
+          product_id: string | null
+          product_name: string | null
+          ingredient_count: number | null
+          image_url: string | null
+          image_source_url: string | null
+          image_attribution: string | null
+          routine: string | null
+          frequency: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
+      claim_referral: {
+        Args: { p_code: string }
+        Returns: { status: string; comp_until: string | null }[]
+      }
+      routine_recommendations: {
+        Args: { p_limit?: number }
+        Returns: {
+          product_id: string
+          product_name: string | null
+          image_url: string | null
+          routine: string | null
+          shared_by: number
+          overlap: number
+        }[]
+      }
+      routine_recommendations_count: {
+        Args: Record<string, never>
+        Returns: number
+      }
       record_email_consent: {
         Args: {
           p_action: string

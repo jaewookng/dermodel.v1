@@ -39,19 +39,60 @@ const json = (body: unknown, status = 200) =>
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 
-const SYSTEM_PROMPT = `You are Dermodel's skincare assistant. You help people understand \
+// ── Bella's guidelines ──────────────────────────────────────────────────────
+// This is the ONLY place Bella's voice and rules are defined. Edit here and
+// redeploy (`supabase functions deploy chat`). The cabinet block is appended
+// per request by buildSystemPrompt() below.
+const SYSTEM_PROMPT = `You are Bella, Dermodel's skincare assistant. You help people understand \
 cosmetic ingredients and the products that contain them, using ONLY the Dermodel \
 database exposed through your tools.
 
-Rules:
+Who you are talking to:
+The person is already curious and literate enough to seek out ingredient lists. They \
+are not a beginner and do not want to be talked down to, but they are not a chemist \
+either. Treat them as a sharp non-specialist.
+
+How to communicate (science communication rules):
+- Each answer should carry ONE or TWO genuine technical terms that are relevant to the \
+question — the concept that actually explains the answer (e.g. "humectant", \
+"chelating agent", "pKa", "occlusive", "comedogenic", "emulsifier", "penetration \
+enhancer", "free-radical scavenger"). Ingredient names and INCI names do NOT count \
+toward this — use them freely, they are just labels.
+- Introduce each technical term once, in passing, with a short plain-language gloss \
+right where it appears (e.g. "a humectant — something that pulls water into the \
+skin"). Then use the term normally for the rest of the answer.
+- Everything AROUND those terms must be simplified: short sentences, concrete \
+mechanisms, no stacked jargon. If a sentence needs a third technical term to work, \
+rewrite it in plain words instead.
+- The reader should come away feeling slightly stretched — they were handed a concept \
+just beyond what they already knew, and they understood it. Aim for that, not for \
+comfort and not for a lecture.
+- Prefer explaining the mechanism ("why") over listing attributes ("what"). One clear \
+mechanism beats three vague benefits.
+- Be concise. No preamble, no recap of the question, no closing offer.
+
+Their cabinet (what they use every day):
+- If a "User's cabinet" section is present below, that is the list of products this \
+person currently uses, with when in the day they use each. It is already loaded — \
+you do not need to ask for it.
+- For ANY product- or ingredient-specific question, look through that cabinet first \
+and answer in the context of what they already use: does something in their routine \
+already contain this ingredient, does it clash or overlap with what they use at that \
+time of day, would this product duplicate something they own. Say so explicitly \
+("You already get niacinamide in the morning from your Anua ampoule").
+- To check what a cabinet product actually contains, call get_product with its \
+product_id. Never guess a cabinet product's ingredient list.
+- If there is no cabinet section, the person is signed out or has no cabinet; answer \
+normally and do not mention the cabinet unless they ask.
+
+Facts and honesty:
 - Answer questions about ingredients and products by calling the tools. Never invent \
 or guess an ingredient list, a product's ingredients, or which products contain an \
 ingredient — those facts must come from a tool result.
 - If a tool returns no matching data, say plainly that you couldn't find it in the \
 Dermodel database rather than making something up.
-- Be concise and accurate. It's fine to explain what an ingredient generally does at a \
-high level, but keep product/ingredient FACTS (names, ingredient lists, popularity) \
-strictly to what the tools return.
+- It's fine to explain what an ingredient generally does, but keep product/ingredient \
+FACTS (names, ingredient lists, popularity) strictly to what the tools return.
 - You are not a medical professional; do not give medical or dermatological diagnoses. \
 Suggest consulting a professional for skin conditions.`;
 
@@ -82,6 +123,72 @@ async function restGet(
 }
 
 const enc = encodeURIComponent;
+
+// --- Cabinet context (pre-loaded, not a tool) ------------------------------
+// Bella should "natively" know what the user uses daily, so the cabinet is read
+// once per request and appended to the system prompt rather than left to the
+// model to ask for. Reads `my_cabinet` (20260823) with the caller's JWT, so RLS
+// scopes it. Any failure — signed out, view not yet applied, network — yields
+// null and the prompt simply has no cabinet section.
+type CabinetRow = {
+  product_id: unknown;
+  product_name: unknown;
+  routine: unknown;
+  frequency: unknown;
+  days_supply: unknown;
+  estimated_empty_on: unknown;
+  status: unknown;
+};
+
+const MAX_CABINET_ITEMS = 40;
+
+function describeRoutine(routine: unknown): string {
+  switch (routine) {
+    case "am": return "morning";
+    case "pm": return "evening";
+    case "both": return "morning and evening";
+    default: return "unspecified time";
+  }
+}
+
+function describeFrequency(freq: unknown): string {
+  switch (freq) {
+    case "daily": return "daily";
+    case "every_other_day": return "every other day";
+    case "weekly": return "weekly";
+    case "as_needed": return "as needed";
+    default: return typeof freq === "string" ? freq.replace(/_/g, " ") : "";
+  }
+}
+
+async function fetchCabinetContext(userToken: string | null): Promise<string | null> {
+  if (!userToken) return null;
+  try {
+    const rows = (await restGet(
+      `my_cabinet?select=product_id,product_name,routine,frequency,days_supply,estimated_empty_on,status` +
+        `&order=opened_on.desc&limit=${MAX_CABINET_ITEMS}`,
+      userToken,
+    )) as CabinetRow[];
+    const active = rows.filter((r) => r.status == null || r.status === "active");
+    if (active.length === 0) return null;
+    const lines = active.map((r) => {
+      const bits = [describeRoutine(r.routine), describeFrequency(r.frequency)].filter(Boolean);
+      const left = typeof r.days_supply === "number"
+        ? `, roughly ${Math.round(Number(r.days_supply))} days of supply`
+        : "";
+      return `- ${String(r.product_name)} (product_id ${String(r.product_id)}) — ${bits.join(", ")}${left}`;
+    });
+    return `User's cabinet (${active.length} product${active.length === 1 ? "" : "s"} they currently use):\n${lines.join("\n")}`;
+  } catch (err) {
+    // Not fatal: the view may not be applied yet, or the token may be stale.
+    console.warn("cabinet context unavailable:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+function buildSystemPrompt(cabinet: string | null): string {
+  return cabinet ? `${SYSTEM_PROMPT}\n\n${cabinet}` : SYSTEM_PROMPT;
+}
 
 // --- Tool definitions (sent to Claude) -------------------------------------
 
@@ -285,6 +392,7 @@ type AnthropicContentBlock = Record<string, unknown>;
 
 async function callClaude(
   apiKey: string,
+  system: string,
   messages: Array<Record<string, unknown>>,
 ): Promise<Record<string, unknown>> {
   const res = await fetch(ANTHROPIC_API_URL, {
@@ -297,7 +405,7 @@ async function callClaude(
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
+      system,
       tools,
       messages,
     }),
@@ -491,9 +599,13 @@ Deno.serve(async (req) => {
 
     // Tool-use loop: keep calling Claude, executing any tool calls, and feeding
     // results back until it produces a plain-text answer (or we hit the cap).
+    // Load the cabinet AFTER the gate (no DB read for a refused turn) and
+    // BEFORE the first model call, so Bella sees it on turn one.
+    const systemPrompt = buildSystemPrompt(await fetchCabinetContext(userToken));
+
     let reply = "";
     for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
-      const response = await callClaude(apiKey, messages);
+      const response = await callClaude(apiKey, systemPrompt, messages);
       const contentBlocks = (response.content as AnthropicContentBlock[]) ?? [];
 
       // Collect any text the model produced this turn.
