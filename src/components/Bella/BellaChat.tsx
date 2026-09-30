@@ -21,6 +21,26 @@ const GREETING =
 const PANEL_MARGIN = 8;
 const BASE_LEFT = 24;
 const BASE_BOTTOM = 24;
+// Resize limits. The panel starts at its natural height; the first resize
+// measures it and switches to an explicit size from then on.
+const MIN_WIDTH = 280;
+const MIN_HEIGHT = 320;
+// Within this many px of the bottom counts as "at the bottom", so the
+// transcript keeps following new text.
+const STICK_THRESHOLD = 32;
+
+type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+
+const RESIZE_HANDLES: { edge: ResizeEdge; className: string }[] = [
+  { edge: 'n', className: '-top-1 left-4 right-4 h-2 cursor-ns-resize' },
+  { edge: 's', className: '-bottom-1 left-4 right-4 h-2 cursor-ns-resize' },
+  { edge: 'e', className: '-right-1 top-4 bottom-4 w-2 cursor-ew-resize' },
+  { edge: 'w', className: '-left-1 top-4 bottom-4 w-2 cursor-ew-resize' },
+  { edge: 'nw', className: '-left-1 -top-1 h-5 w-5 cursor-nwse-resize' },
+  { edge: 'se', className: '-bottom-1 -right-1 h-5 w-5 cursor-nwse-resize' },
+  { edge: 'ne', className: '-right-1 -top-1 h-5 w-5 cursor-nesw-resize' },
+  { edge: 'sw', className: '-bottom-1 -left-1 h-5 w-5 cursor-nesw-resize' },
+];
 
 /**
  * The model needs a conversation that starts with a user turn, so drop the
@@ -122,11 +142,27 @@ export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade
   const [limit, setLimit] = useState<ChatLimit | null>(null);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
+  // null until the user first resizes: the panel keeps its natural size.
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  const [resizing, setResizing] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
+  const resizeRef = useRef<{
+    edge: ResizeEdge;
+    startX: number;
+    startY: number;
+    originW: number;
+    originH: number;
+    originX: number;
+    originY: number;
+    rect: DOMRect;
+  } | null>(null);
+  // Whether the transcript should follow new content. Cleared as soon as the
+  // user scrolls up, restored when they scroll back down or send a message.
+  const stickToBottom = useRef(true);
   // Only the latest assistant message types out; older ones render instantly.
   const animateFromIndex = useRef(0);
   const lastSeedNonce = useRef(0);
@@ -141,20 +177,34 @@ export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade
     if (open) inputRef.current?.focus();
   }, [open]);
 
+  // Follow new content (including the typewriter growing a reply) only while
+  // the user is at the bottom, so scrolling up to reread isn't yanked back.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const id = setInterval(() => {
-      el.scrollTop = el.scrollHeight;
-    }, 120);
-    return () => clearInterval(id);
-  }, [messages, sending]);
+    const follow = () => {
+      if (stickToBottom.current) el.scrollTop = el.scrollHeight;
+    };
+    follow();
+    const observer = new MutationObserver(follow);
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => observer.disconnect();
+  }, []);
+
+  const handleTranscriptScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottom.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_THRESHOLD;
+  };
 
   // --- Sending -------------------------------------------------------------
 
   const sendConversation = useCallback(async (next: ChatMessage[], current: ChatMessage[] = []) => {
     if (sendingRef.current) return;
     sendingRef.current = true;
+    // Sending means "show me the answer": jump back to the bottom.
+    stickToBottom.current = true;
     setMessages(next);
     setSending(true);
     setError(null);
@@ -301,6 +351,83 @@ export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade
     }
   };
 
+  // --- Resizing ------------------------------------------------------------
+  // The panel is anchored bottom-left and positioned by `offset`, so growing
+  // from the left or bottom edge also shifts the offset to keep the opposite
+  // edge where it was.
+
+  const handleResizeStart = (edge: ResizeEdge) => (e: PointerEvent<HTMLDivElement>) => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = panel.getBoundingClientRect();
+    resizeRef.current = {
+      edge,
+      startX: e.clientX,
+      startY: e.clientY,
+      originW: rect.width,
+      originH: rect.height,
+      originX: offset.x,
+      originY: offset.y,
+      rect,
+    };
+    setSize({ width: rect.width, height: rect.height });
+    setResizing(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handleResizeMove = (e: PointerEvent<HTMLDivElement>) => {
+    const r = resizeRef.current;
+    if (!r) return;
+    const dx = e.clientX - r.startX;
+    const dy = e.clientY - r.startY;
+    // The edge being dragged may travel only as far as the viewport margin;
+    // the opposite edge stays put.
+    const { rect } = r;
+    const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), Math.max(min, max));
+    const clampW = (w: number) =>
+      clamp(w, MIN_WIDTH, r.edge.includes('w')
+        ? rect.right - PANEL_MARGIN
+        : window.innerWidth - PANEL_MARGIN - rect.left);
+    const clampH = (h: number) =>
+      clamp(h, MIN_HEIGHT, r.edge.includes('n')
+        ? rect.bottom - PANEL_MARGIN
+        : window.innerHeight - PANEL_MARGIN - rect.top);
+
+    let width = r.originW;
+    let height = r.originH;
+    let x = r.originX;
+    let y = r.originY;
+
+    if (r.edge.includes('e')) width = clampW(r.originW + dx);
+    if (r.edge.includes('w')) {
+      width = clampW(r.originW - dx);
+      x = r.originX + (r.originW - width);
+    }
+    // Anchored at the bottom: the top edge moves on its own, the bottom edge
+    // needs the offset to follow.
+    if (r.edge.includes('n')) height = clampH(r.originH - dy);
+    if (r.edge.includes('s')) {
+      height = clampH(r.originH + dy);
+      y = r.originY + (height - r.originH);
+    }
+
+    setSize({ width, height });
+    setOffset({ x, y });
+  };
+
+  const endResize = (e: PointerEvent<HTMLDivElement>) => {
+    if (!resizeRef.current) return;
+    resizeRef.current = null;
+    setResizing(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* pointer already released */
+    }
+  };
+
   // --- Render --------------------------------------------------------------
 
   return (
@@ -308,8 +435,11 @@ export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade
     // the entrance animation on the inner one, so the keyframes can't clobber
     // the offset the user dragged to.
     <div
-      className={`fixed z-30 w-[min(24rem,calc(100vw-3rem))] ${open ? '' : 'hidden'}`}
+      className={`fixed z-30 ${size ? '' : 'w-[min(24rem,calc(100vw-3rem))]'} ${open ? '' : 'hidden'} ${
+        resizing ? 'select-none' : ''
+      }`}
       style={{
+        width: size?.width,
         left: BASE_LEFT,
         bottom: BASE_BOTTOM,
         transform: `translate(${offset.x}px, ${offset.y}px)`,
@@ -322,12 +452,13 @@ export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        className={`overflow-hidden rounded-[1.5rem] border border-rose-100 bg-white/80 shadow-[0_18px_50px_-18px_rgba(190,110,140,0.5)] backdrop-blur-xl ${
+        style={{ height: size?.height }}
+        className={`flex flex-col overflow-hidden rounded-[1.5rem] border border-rose-100 bg-white/80 shadow-[0_18px_50px_-18px_rgba(190,110,140,0.5)] backdrop-blur-xl ${
           dragging ? 'cursor-grabbing select-none' : 'cursor-grab'
         }`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-rose-100/80 bg-gradient-to-r from-rose-50/90 via-white/60 to-pink-50/80 px-4 py-2.5">
+        <div className="flex shrink-0 items-center justify-between border-b border-rose-100/80 bg-gradient-to-r from-rose-50/90 via-white/60 to-pink-50/80 px-4 py-2.5">
           <div className="flex items-center gap-2">
             <BellaOrbs size={26} active={sending} />
             <span className="text-sm font-semibold tracking-tight text-gray-800">Bella</span>
@@ -345,7 +476,8 @@ export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade
         <div
           ref={scrollRef}
           data-no-drag
-          className="h-72 space-y-2.5 overflow-y-auto bg-gradient-to-b from-rose-50/30 to-white/10 px-3 py-3"
+          onScroll={handleTranscriptScroll}
+          className={`${size ? 'min-h-0 flex-1' : 'h-72'} space-y-2.5 overflow-y-auto bg-gradient-to-b from-rose-50/30 to-white/10 px-3 py-3`}
         >
           {messages.map((msg, i) => {
             if (msg.hidden) return null;
@@ -400,7 +532,7 @@ export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade
         {hooks.length > 0 && (
           <div
             data-no-drag
-            className="flex gap-1.5 overflow-x-auto border-t border-rose-100/80 bg-white/50 px-3 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            className="flex shrink-0 gap-1.5 overflow-x-auto border-t border-rose-100/80 bg-white/50 px-3 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
             {hooks.map((h) => (
               <button
@@ -422,7 +554,7 @@ export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade
             e.preventDefault();
             sendTyped();
           }}
-          className="flex items-center gap-2 border-t border-rose-100/80 bg-white/70 px-3 py-2.5"
+          className="flex shrink-0 items-center gap-2 border-t border-rose-100/80 bg-white/70 px-3 py-2.5"
         >
           <input
             ref={inputRef}
@@ -453,6 +585,21 @@ export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade
         )}
       </div>
       </div>
+
+      {/* Resize handles: invisible strips straddling each edge and corner.
+          They sit on the outer wrapper (not inside the overflow-hidden panel)
+          so they can extend past the border and stay clear of the scrollbar. */}
+      {RESIZE_HANDLES.map(({ edge, className }) => (
+        <div
+          key={edge}
+          aria-hidden
+          onPointerDown={handleResizeStart(edge)}
+          onPointerMove={handleResizeMove}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+          className={`absolute z-10 touch-none ${className}`}
+        />
+      ))}
     </div>
   );
 };

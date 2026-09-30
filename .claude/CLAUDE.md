@@ -82,6 +82,27 @@ tool result → final reply, malformed args, upstream error) behaves; OpenRouter
 lists 15 tool-capable providers for the model. **Not verified against the live
 OpenRouter API** (no key in this environment).
 
+### 🪟 Bella chat panel: scroll + resize (2026-09-30)
+`src/components/Bella/BellaChat.tsx`:
+- **Scroll fix.** An effect force-set `scrollTop = scrollHeight` every 120 ms
+  forever, so you could never scroll up. Replaced with a `MutationObserver` that
+  follows new content (incl. the typewriter) **only while `stickToBottom`** —
+  cleared when the user scrolls >32px from the bottom, restored when they
+  scroll back down or send a message.
+- **Resizable** from all 4 edges + 4 corners (invisible handles on the OUTER
+  wrapper, straddling the border, so they aren't clipped by `overflow-hidden`
+  and don't sit on the scrollbar). `size` is `null` until the first resize
+  (natural size, transcript `h-72`); after that the panel is a flex column with
+  explicit width/height and the transcript is `flex-1`. Min 280×320; each edge
+  stops at the viewport margin. The panel is anchored bottom-left via `offset`,
+  so resizing from the W or S edge also shifts `offset` to hold the opposite
+  edge still. Size is not persisted across reloads.
+Verified 2026-09-30 in Chromium (BellaChat mounted alone, `chat` stubbed with a
+40-line reply): scroll-up survives the typewriter, sending re-pins to bottom;
+NE/W/S/N/SE resizes land at the expected rects and clamp at 8px margin and the
+min size. The full page couldn't be driven headless (Spline face never mounts
+the bubble), so the bubble → panel open path wasn't exercised.
+
 ### 💬 The chat gate (2026-08-19)
 `supabase/functions/chat/index.ts` now calls `consume_chat_turn()` **before**
 spending anything at Anthropic, and **fails closed** (503) if the gate itself
