@@ -1,4 +1,5 @@
 import { Toaster } from "@/components/ui/toaster";
+import { Toaster as SonnerToaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
@@ -6,6 +7,8 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AnalyticsListener } from "@/components/AnalyticsListener";
 import { ReferralListener } from "@/components/ReferralListener";
+import { BillingReturnListener } from "@/components/billing/BillingReturnListener";
+import { UpgradeProvider } from "@/contexts/UpgradeContext";
 import Index from "./pages/Index";
 import { Settings } from "./pages/Settings";
 import { Favorites } from "./pages/Favorites";
@@ -34,10 +37,15 @@ const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
+      {/* Most of the app calls toast() from sonner; without this mounted,
+          every one of those messages was silently dropped. */}
+      <SonnerToaster position="top-center" richColors closeButton />
       <BrowserRouter>
         <AuthProvider>
           <AnalyticsListener />
           <ReferralListener />
+          <BillingReturnListener />
+          <UpgradeProvider>
           <Routes>
             <Route path="/" element={<Index />} />
             <Route
@@ -91,6 +99,7 @@ const App = () => (
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
+          </UpgradeProvider>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>

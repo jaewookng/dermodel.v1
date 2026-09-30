@@ -82,6 +82,42 @@ tool result → final reply, malformed args, upstream error) behaves; OpenRouter
 lists 15 tool-capable providers for the model. **Not verified against the live
 OpenRouter API** (no key in this environment).
 
+### 💳 Billing UI (2026-09-30)
+**Status**: ✅ code complete, no backend change. Needs `npm run build` + `firebase deploy --only hosting`.
+- **`src/components/billing/UpgradeDialog.tsx`** — the one Premium plan picker.
+  Monthly / 6 months / Yearly (defaults to Yearly), prices and "Save N%" computed
+  from `billing_plans_public` (`src/hooks/useBillingPlans.ts`), feature list built
+  from the plan's flags so it can't overclaim (deep dive is NOT listed — `chat`
+  always sends `p_deep_dive: false`). CTA by state: signed out → Sign in;
+  `sell_premium` false → no button, "not available in your region";
+  `plan_source='subscription'` → Manage billing; comp → subscribe with a
+  "free Premium until <date>" note.
+- **`src/contexts/UpgradeContext.tsx`** — `useUpgrade().openUpgrade()` from
+  anywhere; hosts the dialog plus its own LoginDialog. Wired into Settings,
+  Bella's limit wall (was straight-to-monthly checkout), and a "Go Premium"
+  header-menu item (only for free users where `sell_premium`).
+- **`SubscriptionStatus`**: the "Upgrade to Premium" button had **no onClick**
+  — now opens the picker. Added **Manage billing** (Stripe portal; never
+  region-gated, §12.6), **Update payment method** when `past_due`, **Keep
+  Premium** for comps, and **Add Bella credit** when a subscriber has < $1 left.
+- **`BillingReturnListener`** (in App): handles `?billing=success|topup-success|cancelled`
+  from Stripe — toast, strip the flag, re-read `my_chat_entitlement` every 2 s
+  (max 30 s) until the webhook lands.
+- **`useCheckout`**: sends `return_url` = current page (server still enforces
+  same-origin); surfaces 400 `error` text (e.g. top-ups not configured) instead
+  of a generic failure; fixed `busy` never resetting after a handled error.
+  Bella's `monthly_credit_limit` wall now calls top-up, not subscribe.
+- 🐛 **Every sonner `toast()` in the app was invisible**: 12 files import
+  `toast` from `sonner`, but only the shadcn Radix `<Toaster />` was mounted.
+  `App.tsx` now also mounts sonner's `<Toaster />`.
+⚠️ Top-up buttons return "Credit top-ups are not available" until
+`STRIPE_TOPUP_PRICE_ID` is set on `create-checkout-session`.
+Verified 2026-09-30 in Chromium (harness with fake auth + seeded entitlement,
+live plan catalog): all six states render the right card + dialog; 6-month
+pick sends `interval: "semiannual"`; `?billing=cancelled` toasts and is
+stripped; 403 `region_unavailable` shows its own toast and re-enables the
+button; past-due opens the portal. Not verified: a real Stripe round trip.
+
 ### 🪟 Bella chat panel: scroll + resize (2026-09-30)
 `src/components/Bella/BellaChat.tsx`:
 - **Scroll fix.** An effect force-set `scrollTop = scrollHeight` every 120 ms

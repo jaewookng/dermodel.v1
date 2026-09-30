@@ -17,6 +17,8 @@ interface BellaLimitProps {
   signedIn: boolean;
   onNewChat: () => void;
   onUpgrade: () => void;
+  /** Buys a one-off credit pack (Stripe `payment` mode). */
+  onTopUp: () => void;
   onSignIn: () => void;
 }
 
@@ -32,6 +34,7 @@ export const BellaLimit = ({
   signedIn,
   onNewChat,
   onUpgrade,
+  onTopUp,
   onSignIn,
 }: BellaLimitProps) => {
   // Ran out of turns inside one conversation. Not a wall — starting a new one
@@ -107,7 +110,7 @@ export const BellaLimit = ({
           You've used this month's Bella credit. It resets at your next renewal.
         </p>
         {canBuy && (
-          <Button size="sm" variant="outline" className="mt-2.5" onClick={onUpgrade}>
+          <Button size="sm" variant="outline" className="mt-2.5" onClick={onTopUp}>
             Add credit
           </Button>
         )}

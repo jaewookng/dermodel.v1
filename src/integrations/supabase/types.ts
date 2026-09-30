@@ -321,6 +321,26 @@ export type Database = {
       }
     }
     Views: {
+      billing_plans_public: {
+        Row: {
+          plan: string | null
+          display_name: string | null
+          price_cents_monthly: number | null
+          price_cents_semiannual: number | null
+          price_cents_yearly: number | null
+          credit_allowance_usd: number | null
+          lifetime_conversations: number | null
+          monthly_conversations: number | null
+          conversation_turn_cap: number | null
+          allow_deep_dive: boolean | null
+          includes_cabinet_memory: boolean | null
+          includes_checkin_emails: boolean | null
+          includes_surveys: boolean | null
+          includes_referrals: boolean | null
+          sort_order: number | null
+        }
+        Relationships: []
+      }
       my_chat_entitlement: {
         Row: {
           user_id: string | null

@@ -9,6 +9,8 @@ import { BellaIntro } from '@/components/Bella/BellaIntro';
 import { useBellaHooks, type BellaHook } from '@/hooks/useBellaHooks';
 import { useFeatureSeen } from '@/hooks/useFeatureSeen';
 import { useCheckout } from '@/hooks/useCheckout';
+import { useUpgrade } from '@/contexts/UpgradeContext';
+import { useEntitlement } from '@/hooks/useEntitlement';
 import type { GraphTarget } from '@/hooks/useGraphData';
 import { useAuth } from '@/contexts/AuthContext';
 import { LoginDialog } from '@/components/Auth/LoginDialog';
@@ -20,7 +22,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { LogIn, LogOut, Settings, Heart, User, PackageCheck } from 'lucide-react';
+import { LogIn, LogOut, Settings, Heart, User, PackageCheck, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
 const Index = () => {
@@ -37,6 +39,8 @@ const Index = () => {
 
   const bellaUserId = user?.id ?? session?.user?.id ?? null;
   const { start: startCheckout } = useCheckout();
+  const { openUpgrade } = useUpgrade();
+  const { isPremium, canBuy, entitlement } = useEntitlement();
 
   // Bella's openers are built server-side; re-fetched when the user signs in or
   // out, since a signed-in user with favorites gets personalized ones.
@@ -132,6 +136,13 @@ const Index = () => {
                     <Settings className="mr-2 h-4 w-4" />
                     <span>Settings</span>
                   </DropdownMenuItem>
+                  {/* Only once the plan is known, and never where we don't sell. */}
+                  {entitlement && !isPremium && canBuy && (
+                    <DropdownMenuItem onClick={openUpgrade}>
+                      <Sparkles className="mr-2 h-4 w-4 text-rose-400" />
+                      <span>Go Premium</span>
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleSignOut} disabled={signingOut}>
                     <LogOut className="mr-2 h-4 w-4" />
@@ -186,7 +197,8 @@ const Index = () => {
         seedHook={seedHook}
         seedNonce={seedNonce}
         hooks={bellaHooks ?? []}
-        onUpgrade={() => startCheckout('subscription')}
+        onUpgrade={openUpgrade}
+        onTopUp={() => startCheckout('payment')}
         onSignIn={() => setLoginOpen(true)}
       />
 

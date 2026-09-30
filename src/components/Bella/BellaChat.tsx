@@ -123,6 +123,8 @@ interface BellaChatProps {
   hooks: BellaHook[];
   /** Opens the purchase flow. Only ever called when `sell_premium` is true. */
   onUpgrade: () => void;
+  /** Buys a one-off Bella credit pack. */
+  onTopUp: () => void;
   /** Opens the sign-in dialog, for signed-out users hitting the wall. */
   onSignIn: () => void;
 }
@@ -132,7 +134,7 @@ interface BellaChatProps {
  * grabbing anywhere that isn't a control, and stays mounted so the conversation
  * survives closing and reopening.
  */
-export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade, onSignIn }: BellaChatProps) => {
+export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade, onTopUp, onSignIn }: BellaChatProps) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'assistant', content: GREETING, local: true },
   ]);
@@ -522,6 +524,7 @@ export const BellaChat = ({ open, onClose, seedHook, seedNonce, hooks, onUpgrade
             signedIn={!!entitlement}
             onNewChat={startNewConversation}
             onUpgrade={onUpgrade}
+            onTopUp={onTopUp}
             onSignIn={onSignIn}
           />
         ) : (

@@ -1,8 +1,10 @@
 import { useEntitlement, CHECKIN_CONSENT_TEXT } from '@/hooks/useEntitlement';
+import { useCheckout } from '@/hooks/useCheckout';
+import { useUpgrade } from '@/contexts/UpgradeContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Loader2 } from 'lucide-react';
+import { Loader2, CreditCard, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 
 const formatDate = (iso: string | null) =>
@@ -32,6 +34,8 @@ export const SubscriptionStatus = () => {
     allowanceScope,
     setCheckinConsent,
   } = useEntitlement();
+  const { start, busy } = useCheckout();
+  const { openUpgrade } = useUpgrade();
 
   // The billing migrations may not be applied yet. Say nothing rather than
   // showing a wrong or alarming plan state.
@@ -54,6 +58,11 @@ export const SubscriptionStatus = () => {
   const consentRequired = entitlement.checkin_email_consent_required === true;
   const emailsOn = entitlement.checkin_emails_effective === true;
   const consentedAt = formatDate(entitlement.checkin_email_consent_at);
+  // Only a real Stripe subscription has anything to manage in the portal.
+  const subscribed = isPremium && entitlement.plan_source === 'subscription';
+  const pastDue = entitlement.subscription_status === 'past_due';
+  const creditLeft = Number(entitlement.credit_usd_remaining_this_month ?? 0);
+  const creditLow = subscribed && creditLeft < 1;
 
   const toggleEmails = async (next: boolean) => {
     try {
@@ -91,7 +100,7 @@ export const SubscriptionStatus = () => {
               of ${Number(entitlement.credit_allowance_usd ?? 0).toFixed(2)} Bella
               credit left this month
             </p>
-            {entitlement.subscription_status === 'past_due' && (
+            {pastDue && (
               <p className="mt-1 text-xs text-amber-600">
                 Your last payment didn't go through — update your card to keep Premium.
               </p>
@@ -153,11 +162,49 @@ export const SubscriptionStatus = () => {
           )}
         </div>
 
-        {/* No purchase path at all where we don't sell. */}
-        {!isPremium && canBuy && (
-          <Button size="sm" className="w-full sm:w-auto">
-            Upgrade to Premium
-          </Button>
+        {/* Billing actions. The portal is never region-blocked (§12.6), so an
+            existing subscriber can always manage or cancel; new purchases only
+            render where we sell. */}
+        {(subscribed || canBuy) && (
+          <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-4">
+            {subscribed && (
+              <Button
+                size="sm"
+                variant={pastDue ? 'default' : 'outline'}
+                disabled={!!busy}
+                onClick={() => start('portal')}
+              >
+                {busy === 'portal' ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <CreditCard className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                {pastDue ? 'Update payment method' : 'Manage billing'}
+              </Button>
+            )}
+            {creditLow && canBuy && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!!busy}
+                onClick={() => start('payment')}
+              >
+                {busy === 'payment' && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                Add Bella credit
+              </Button>
+            )}
+            {!subscribed && canBuy && (
+              <Button size="sm" onClick={openUpgrade}>
+                <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                {isComp ? 'Keep Premium' : 'Upgrade to Premium'}
+              </Button>
+            )}
+          </div>
+        )}
+        {subscribed && (
+          <p className="text-xs text-gray-400">
+            Cancel, change your card or download invoices in the billing portal.
+          </p>
         )}
       </CardContent>
     </Card>
